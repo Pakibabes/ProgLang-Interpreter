@@ -1,0 +1,15 @@
+%% an example program of an LEXOR created by budskie
+%% this is a sample program in LEXOR
+    SCRIPT AREA
+    START SCRIPT
+        DECLARE INT x, y, z=5
+        DECLARE CHAR a_1=’n’
+        DECLARE BOOL t=”TRUE”
+        x=y=4
+        a_1=’c’
+        %% this is a comment
+        PRINT: x & t & z & $ & a_1 & [#] & “last”
+    END SCRIPT
+%%Output of the sample program:
+%%   4TRUE5
+%%   c#last
