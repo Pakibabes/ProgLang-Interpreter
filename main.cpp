@@ -18,7 +18,8 @@ vector<string> readFile(string fName){
     return lines;
 }
 int main(){
-    cout << "Lexor Programming";
     vector<string> program = readFile("test_ni_Pakibabes.lexor");
+    Interpreter lexor(program);
+    lexor.run();   
     return 0;
 }
