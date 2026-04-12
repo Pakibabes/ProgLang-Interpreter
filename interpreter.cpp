@@ -2,6 +2,7 @@
 #include "interpreter.h"
 #include <iostream>
 #include <algorithm>
+#include <stdexcept>
 
 using namespace std;
 // remove spacing
@@ -173,6 +174,10 @@ void Interpreter::processPrint(){
                     else{
                         if((token.front() == '"' && token.back() == '"') ||
                            (token.front() == '\'' && token.back() == '\''))cout << token.substr(1, token.size() - 2);
+                        else if((token.front() == '"' && token.back() != '"')) throw runtime_error("Kuwang ug uwahi na QUOTA : At line ");
+                        else if((token.front() == '\'' && token.back() != '\'')) throw runtime_error("Kuwang ug usa ka uwahi na QUOTA : At line ");
+                        else if((token.front() != '"' && token.back() == '"')) throw runtime_error("Kuwang ug kinaunhan na QUOTA : At line ");
+                        else if((token.front() != '\'' && token.back() == '\'')) throw runtime_error("Kuwang ug usa ka kinaunhan na QUOTA : At line ");
                         else cout << token;
                     }
                     part = "";

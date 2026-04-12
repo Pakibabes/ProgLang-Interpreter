@@ -11,6 +11,7 @@
         a_1='c'
         %% this is a comment
         PRINT: x & t & z & $ & a_1 & [#] & "last"
+        PRINT: 'Budskie"
     END SCRIPT
 %%Output of the sample program:
 %%   4TRUE5
