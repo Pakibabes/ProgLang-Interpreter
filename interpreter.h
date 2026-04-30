@@ -27,8 +27,11 @@ public:
     void processDeclarations();
     void processAssignments();
     void processPrint();
+    void validateOneStatementPerLine();
+    void validateDeclarationOrder();
 
     string replaceVariables(string expr);
+    
 };
 
 

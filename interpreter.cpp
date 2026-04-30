@@ -4,10 +4,19 @@
 #include <algorithm>
 #include <locale> // for smart quotes
 #include <stdexcept>
+#include <set>
 
 using namespace std;
 //helper functions
 // remove spacing
+
+set<string> reservedWords = {
+    "SCRIPT", "AREA",
+    "START", "END",
+    "SCRIPT", "DECLARE",
+    "PRINT", "INT", "CHAR", "BOOL", "FLOAT"
+};
+
 string trim (string str){
     int start = str.find_first_not_of(" \t");
     int end = str.find_last_not_of(" \t");
@@ -21,6 +30,24 @@ bool startsWith(const string& str, const string& prefix) {
     return str.rfind(prefix, 0) == 0;
 }
 
+bool isReservedWord(string word) {
+    return reservedWords.find(word) != reservedWords.end();
+}
+
+bool isAllUpper(const string& s) {
+    for (char c : s) {
+        if (isalpha(c) && !isupper(c))
+            return false;
+    }
+    return true;
+}
+
+bool isQuoted(const string& token) {
+    return (token.size() >= 2 &&
+           ((token.front() == '"' && token.back() == '"') ||
+            (token.front() == '\'' && token.back() == '\'')));
+}
+
 bool endsWith(const string& str, const string& suffix) {
     return str.size() >= suffix.size() &&
            str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -32,6 +59,17 @@ bool isExpression(string value) {
            value.find('*') != string::npos ||
            value.find('/') != string::npos ||
            value.find('(') != string::npos;
+}
+
+bool isValidIdentifier(const string& name) {
+    if (name.empty()) return false;
+    if (!(isalpha(name[0]) || name[0] == '_'))
+        return false;
+    for (char c : name) {
+        if (!(isalnum(c) || c == '_'))
+            return false;
+    }
+    return true;
 }
 
 string normalizeQuotes(string value) {
@@ -57,6 +95,13 @@ string normalizeQuotes(string value) {
     return value;
 }
 
+string getStatementType(const string& line) {
+    if (line.find("DECLARE") == 0) return "DECLARE";
+    if (line.find("PRINT:") == 0) return "PRINT";
+    if (line.find("=") != string::npos) return "ASSIGN";
+    return "UNKNOWN";
+}
+
 //errors
 void error(const string& code, const string& message, int line = -1) {
     cout << "LEXOR Error [" << code << "]\n";
@@ -76,6 +121,8 @@ Interpreter::Interpreter(vector<string> programLines) {
 void Interpreter::run() {
     removeComments();
     validateStructure();
+    validateOneStatementPerLine();
+    validateDeclarationOrder();
 
     
     cout << "LEXOR program structure is valid." << endl; // validates if naaay START SCRIPT, SCRIPT AREA, ug END SCRIPT
@@ -103,6 +150,9 @@ void Interpreter::removeComments() {
 
 void Interpreter::validateStructure() {
 
+    bool foundStart = false;
+    bool foundEnd = false;
+
     if (lines.size() < 3) {
         error("LEXOR-000", "Program is too short. Missing required structure.");
     }
@@ -122,51 +172,89 @@ void Interpreter::validateStructure() {
               "Expected 'END SCRIPT' at end of program, found: " + lines.back(),
               lines.size());
     }
+
+    for(int i=1; i<lines.size(); i++){
+        if(lines[i] == "START SCRIPT"){
+            if(foundStart) error("LEXOR-004", "Multiple 'START SCRIPT' found.", i+1);
+            foundStart = true;
+        }
+        else if(lines[i] == "END SCRIPT"){
+            if(foundEnd) error("LEXOR-005", "Multiple 'END SCRIPT' found.", i+1);
+            foundEnd = true;
+        }
+
+        if(foundStart && i > 1 && lines[i] == "SCRIPT AREA"){
+            error("LEXOR-006", "'SCRIPT AREA' should only appear at the beginning.", i+1);
+        }
+    }
 }
 
-void Interpreter::processDeclarations(){
-    for (int i = 2; i < lines.size(); i++){
-        string line = lines[i];
+void Interpreter::processDeclarations() {
+    int i = 2;
 
-        // when declaration ends
-        if(line.find("DECLARE") != 0) break;
+    while (i < lines.size()) {
+        string line = trim(lines[i]);
 
-        string rest = line.substr(8); // removes the word declare
+        // stop when DECLARE phase ends
+        if (line.find("DECLARE") != 0) {
+            break;
+        }
+
+        string rest = line.substr(8);
 
         int spacePos = rest.find(" ");
-        string type = rest.substr(0, spacePos);
-        string vars = rest.substr(spacePos + 1);
+        string type = trim(rest.substr(0, spacePos));
+        string vars = trim(rest.substr(spacePos + 1));
 
         string var = "";
+
         for (int j = 0; j <= vars.length(); j++) {
             if (j == vars.length() || vars[j] == ',') {
-                int equalPos = var.find('=');
-                if (equalPos != string::npos) {
-                    string name = trim(var.substr(0, equalPos));
-                    string value = trim(var.substr(equalPos + 1));
-                    value = normalizeQuotes(value);
-                    symbolTable[name] = value;
-                    typeTable[name] = type;
-                }
-                else {
-                    string name = trim(var);
-                    if (type == "INT" || type == "FLOAT")
-                        symbolTable[name] = "0";
-                    else if (type == "BOOL"){
-                        
-                        symbolTable[name] = "FALSE";
-                    }
-                    else if (type == "CHAR")
-                        symbolTable[name] = "";
 
-                    typeTable[name] = type;
+                string token = trim(var);
+                int equalPos = token.find('=');
+
+                string name;
+                string value = "";
+
+                if (equalPos != string::npos) {
+                    name = trim(token.substr(0, equalPos));
+                    value = trim(token.substr(equalPos + 1));
+                    value = normalizeQuotes(value);
                 }
+            
+                else {
+                    name = token;
+
+                    if (type == "INT" || type == "FLOAT")
+                        value = "0";
+                    else if (type == "BOOL")
+                        value = "FALSE";
+                    else if (type == "CHAR")
+                        value = "";
+                }
+
+                if (isReservedWord(name)) {
+                    error("LEXOR-010",
+                          "Reserved word cannot be used as variable name: " + name);
+                }
+
+                if (!isValidIdentifier(name)) {
+                    error("LEXOR-007",
+                          "Invalid variable name: " + name);
+                }
+
+                symbolTable[name] = value;
+                typeTable[name] = type;
+
                 var = "";
             }
             else {
                 var += vars[j];
             }
         }
+
+        i++;
     }
 }
 
@@ -207,49 +295,81 @@ void Interpreter::processAssignments(){
     }
 }
 
-void Interpreter::processPrint(){
+void Interpreter::processPrint() {
     setlocale(LC_ALL, "en_US.UTF-8");
-    for(string line : lines){
-        if(line.find("PRINT:")==0){
-            string content = trim(line.substr(6));
-            string part="";
-            for ( int i = 0; i <= content.length(); i++ ){
-                if ( i == content.length() || content[i] =='&'){
-                    
-                    string token = trim(part);
 
-                    // normalize quotes here
-                    if (
-                        (startsWith(token, "\"") && endsWith(token, "\"")) ||
-                        (startsWith(token, "'") && endsWith(token, "'"))
-                    ) {
-                        token = token.substr(1, token.size() - 2);
-                    }
-                    else if (
-                        (startsWith(token, "”") && endsWith(token, "”")) ||
-                        (startsWith(token, "’") && endsWith(token, "’"))
-                    ) {
-                        token = token.substr(3, token.size() - 6);
-                    }
-                    if (token == "$") {
-                        cout << endl;
-                    }
-                    else if (token.size() >= 2 && token.front() == '[' && token.back() == ']') {
-                        cout << token.substr(1, token.size() - 2);
-                    }
-                    else if (symbolTable.find(token) != symbolTable.end()) {
-                        cout << symbolTable[token];
-                    }
-                    else {
-                        cout << token;
-                    }
-                    part = "";
-                }else part+= content[i];
+    for (string line : lines) {
+
+        if (line.find("PRINT:") != 0) continue;
+
+        string content = trim(line.substr(6));
+
+        vector<string> tokens;
+        string part = "";
+        bool inQuotes = false;
+
+        for (size_t i = 0; i < content.size(); i++) {
+            char c = content[i];
+
+            // toggle quotes
+            if (c == '"') {
+                inQuotes = !inQuotes;
+                continue;
             }
-            cout << endl;
+
+            // NEWLINE operator
+            if (c == '$' && !inQuotes) {
+                if (!trim(part).empty())
+                    tokens.push_back(trim(part));
+
+                tokens.push_back("$");
+                part = "";
+                continue;
+            }
+
+            if (c == '&' && !inQuotes) {
+                if (!trim(part).empty())
+                    tokens.push_back(trim(part));
+
+                part = "";
+                continue;
+            }
+
+            part += c;
         }
+
+        if (!trim(part).empty()) {
+            tokens.push_back(trim(part));
+        }
+
+        for (string token : tokens) {
+
+            // newline operator
+            if (token == "$") {
+                cout << endl;
+                continue;
+            }
+
+            token = trim(token);
+
+            // remove surrounding quotes for string literals
+            if (!token.empty() && token.front() == '"' && token.back() == '"') {
+                cout << token.substr(1, token.size() - 2);
+            }
+            else {
+                if (symbolTable.find(token) != symbolTable.end()) {
+                    cout << symbolTable[token];
+                }
+                else {
+                    cout << token;
+                }
+            }
+        }
+
+        cout << endl;
     }
 }
+
 string Interpreter::replaceVariables(string expr) {
     string result = "";
     string current = "";
@@ -277,4 +397,58 @@ string Interpreter::replaceVariables(string expr) {
     }
 
     return result;
+}
+
+void Interpreter::validateOneStatementPerLine() {
+    for (int i = 0; i < lines.size(); i++) {
+        string line = trim(lines[i]);
+
+        int declareCount = 0;
+        int printCount = 0;
+
+        // count DECLARE occurrences
+        size_t pos = line.find("DECLARE");
+        while (pos != string::npos) {
+            declareCount++;
+            pos = line.find("DECLARE", pos + 1);
+        }
+
+        if (line.find("PRINT:") == 0) printCount = 1;
+
+        // assignment detection (only if NOT DECLARE line)
+        bool hasAssign = (line.find("=") != string::npos && line.find("DECLARE") != 0);
+
+        int statementCount = declareCount + printCount + (hasAssign ? 1 : 0);
+
+        if (statementCount > 1) {
+            error("LEXOR-008",
+                  "Multiple statements in one line are not allowed: " + line,
+                  i + 1);
+        }
+    }
+}
+
+void Interpreter::validateDeclarationOrder() {
+    bool executionStarted = false;
+
+    for (int i = 0; i < lines.size(); i++) {
+        string line = trim(lines[i]);
+
+        // detect real execution statements ONLY
+        bool isPrint = line.find("PRINT:") == 0;
+        bool isAssign = (!line.empty() &&
+                         line.find("DECLARE") != 0 &&
+                         line.find("=") != string::npos);
+
+        if (isPrint || isAssign) {
+            executionStarted = true;
+        }
+
+        // DECLARE after execution is forbidden
+        if (executionStarted && line.find("DECLARE") == 0) {
+            error("LEXOR-009",
+                  "Variable declarations must appear before executable statements: " + line,
+                  i + 1);
+        }
+    }
 }
