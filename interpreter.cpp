@@ -299,78 +299,74 @@ void Interpreter::processPrint() {
     setlocale(LC_ALL, "en_US.UTF-8");
 
     for (string line : lines) {
-
-        if (line.find("PRINT:") != 0) continue;
+        if (line.find("PRINT:") != 0)
+            continue;
 
         string content = trim(line.substr(6));
 
         vector<string> tokens;
-        string part = "";
+        string buffer = "";
         bool inQuotes = false;
 
         for (size_t i = 0; i < content.size(); i++) {
             char c = content[i];
 
-            // toggle quotes
+            // QUOTES HANDLING
             if (c == '"') {
+                if (inQuotes) {
+                    tokens.push_back("\"" + buffer + "\"");
+                    buffer = "";
+                }
                 inQuotes = !inQuotes;
                 continue;
             }
-
-            // NEWLINE operator
-            if (c == '$' && !inQuotes) {
-                if (!trim(part).empty())
-                    tokens.push_back(trim(part));
-
+            if (inQuotes) {
+                buffer += c;
+                continue;
+            }
+            // NEWLINE OPERATOR $
+            if (c == '$') {
+                string cleaned = trim(buffer);
+                if (!cleaned.empty()) tokens.push_back(cleaned);
                 tokens.push_back("$");
-                part = "";
-                continue;
+                buffer = "";
+            } 
+            else if (c == '&') {
+                string cleaned = trim(buffer);
+                if (!cleaned.empty()) tokens.push_back(cleaned);
+                buffer = "";
+            } 
+            else if (isspace(c)) {
+                continue; 
             }
-
-            if (c == '&' && !inQuotes) {
-                if (!trim(part).empty())
-                    tokens.push_back(trim(part));
-
-                part = "";
-                continue;
+            else {
+                buffer += c;
             }
-
-            part += c;
         }
 
-        if (!trim(part).empty()) {
-            tokens.push_back(trim(part));
-        }
+        string cleaned = trim(buffer);
+        if (!cleaned.empty()) tokens.push_back(cleaned);
 
         for (string token : tokens) {
-
-            // newline operator
+            // NEWLINE
             if (token == "$") {
                 cout << endl;
                 continue;
             }
 
-            token = trim(token);
+            // STRING LITERAL
+            if (isQuoted(token)) {
+                cout << normalizeQuotes(token);
+                continue;
+            }
 
-            // remove surrounding quotes for string literals
-            if (!token.empty() && token.front() == '"' && token.back() == '"') {
-                cout << token.substr(1, token.size() - 2);
+            // VARIABLE
+            if (symbolTable.find(token) != symbolTable.end()) {
+                cout << symbolTable[token];
+                continue;
             }
-            else {
-                if (symbolTable.find(token) != symbolTable.end()) {
-                    cout << symbolTable[token];
-                }
-                else {
-                    if (symbolTable.find(token) != symbolTable.end()) {
-                        cout << symbolTable[token];
-                        } else {
-                            error("LEXOR-011",
-                                     "Undefined variable or missing quotes: " + token);
-                            }
-                }
-            }
+            error("LEXOR-011", "Invalid PRINT token: " + token);
         }
-
         cout << endl;
     }
 }
