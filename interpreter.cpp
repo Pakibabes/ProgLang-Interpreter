@@ -83,20 +83,27 @@ void Interpreter::run() {
     processDeclarations();
     processAssignments();
     processPrint();
+    validateDeclarationOrder();
 }
 
-void Interpreter::removeComments() {
 
+void Interpreter::removeComments() {
     vector<string> cleaned;
 
     for (string line : lines) {
-        line = trim(line);
-        if (line.empty()) continue;
-        if (line.find("%%") == 0) {
-            continue;
+        int commentPos = line.find("%%");
+
+        if (commentPos != string::npos) {
+            line = line.substr(0, commentPos);
         }
-        cleaned.push_back(line);
+
+        line = trim(line);
+
+        if (!line.empty()) {
+            cleaned.push_back(line);
+        }
     }
+
     lines = cleaned;
 }
 
@@ -104,7 +111,7 @@ void Interpreter::removeComments() {
 void Interpreter::validateStructure() {
 
     if (lines.size() < 3) {
-        error("LEXOR-000", "Program is too short. Missing required structure.");
+        error("LEXOR-000", "Invalid structure. Missing required structure.");
     }
 
     if (lines[0] != "SCRIPT AREA") {
@@ -123,7 +130,23 @@ void Interpreter::validateStructure() {
               lines.size());
     }
 }
-
+void Interpreter::validateDeclarationOrder() {
+    bool seenExecutable = false;
+    for (int i = 2; i < lines.size() - 1; i++) {
+        string line = trim(lines[i]);
+        if (line.empty()) continue;
+        if (line.find("DECLARE") == 0) {
+            if (seenExecutable) {
+                error("LEXOR-004",
+                      "Variable declarations must appear before executable statements.",
+                      i + 1);
+            }
+        }
+        else {
+            seenExecutable = true;
+        }
+    }
+}
 void Interpreter::processDeclarations(){
     for (int i = 2; i < lines.size(); i++){
         string line = lines[i];
@@ -207,47 +230,51 @@ void Interpreter::processAssignments(){
     }
 }
 
-void Interpreter::processPrint(){
-    setlocale(LC_ALL, "en_US.UTF-8");
-    for(string line : lines){
-        if(line.find("PRINT:")==0){
-            string content = trim(line.substr(6));
-            string part="";
-            for ( int i = 0; i <= content.length(); i++ ){
-                if ( i == content.length() || content[i] =='&'){
-                    
-                    string token = trim(part);
+void Interpreter::processPrint() {
+    for (int lineIndex = 0; lineIndex < lines.size(); lineIndex++) {
+        string line = trim(lines[lineIndex]);
 
-                    // normalize quotes here
-                    if (
-                        (startsWith(token, "\"") && endsWith(token, "\"")) ||
-                        (startsWith(token, "'") && endsWith(token, "'"))
-                    ) {
-                        token = token.substr(1, token.size() - 2);
-                    }
-                    else if (
-                        (startsWith(token, "”") && endsWith(token, "”")) ||
-                        (startsWith(token, "’") && endsWith(token, "’"))
-                    ) {
-                        token = token.substr(3, token.size() - 6);
-                    }
-                    if (token == "$") {
-                        cout << endl;
-                    }
-                    else if (token.size() >= 2 && token.front() == '[' && token.back() == ']') {
-                        cout << token.substr(1, token.size() - 2);
-                    }
-                    else if (symbolTable.find(token) != symbolTable.end()) {
-                        cout << symbolTable[token];
-                    }
-                    else {
-                        cout << token;
-                    }
-                    part = "";
-                }else part+= content[i];
+        if (line.find("PRINT:") != 0) continue;
+
+        string content = trim(line.substr(6));
+        string part = "";
+
+        for (int i = 0; i <= content.length(); i++) {
+            if (i == content.length() || content[i] == '&') {
+
+                string token = trim(part);
+
+                // ✅ Rule 1: newline
+                if (token == "$") {
+                    cout << endl;
+                }
+
+                // ✅ Rule 2: escape [ ... ]
+                else if (token.size() >= 2 &&
+                         token.front() == '[' &&
+                         token.back() == ']') {
+
+                    cout << token.substr(1, token.size() - 2);
+                }
+
+                // ✅ Rule 3: variable
+                else if (symbolTable.find(token) != symbolTable.end()) {
+                    cout << symbolTable[token];
+                }
+
+                // ✅ Rule 4: literal (string/char already normalized)
+                else {
+                    cout << normalizeQuotes(token);
+                }
+
+                part = "";
+            } 
+            else {
+                part += content[i];
             }
-            cout << endl;
         }
+
+        cout << endl;
     }
 }
 string Interpreter::replaceVariables(string expr) {
