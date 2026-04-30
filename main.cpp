@@ -18,7 +18,13 @@ vector<string> readFile(string fName){
     return lines;
 }
 int main(){
-    cout << "Lexor Programming";
-    vector<string> program = readFile("test_ni_Pakibabes.lexor");
+    // vector<string> program = readFile("test_ni_Pakibabes.lexor");
+    vector<string> program = readFile("sampleProgram2.lexor");
+    Interpreter lexor(program);
+    lexor.run();   
     return 0;
 }
+// Running the program
+// g++ is the compiler main  and interpreter needs to be compiled
+// g++ main.cpp interpreter.cpp -o lexor
+// ./lexor

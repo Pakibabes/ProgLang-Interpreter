@@ -1,0 +1,4 @@
+LEXOR-000 - Missing SCRIPT AREA / invalid program structure
+LEXOR-001 - Missing or incorrect SCRIPT AREA keyword
+LEXOR-002 - Missing or incorrect START SCRIPT keyword
+LEXOR-003 - Missing or incorrect END SCRIPT keyword
