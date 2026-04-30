@@ -57,6 +57,15 @@ string normalizeQuotes(string value) {
     return value;
 }
 
+//errors
+void error(const string& code, const string& message, int line = -1) {
+    cout << "LEXOR Error [" << code << "]\n";
+    if (line != -1) {
+        cout << "Line " << line << ": ";
+    }
+    cout << message << endl;
+    exit(1);
+}
 // main functnions
 Interpreter::Interpreter(vector<string> programLines) {
 
@@ -95,23 +104,23 @@ void Interpreter::removeComments() {
 void Interpreter::validateStructure() {
 
     if (lines.size() < 3) {
-        cout << "Invalid program." << endl;
-        exit(1);
+        error("LEXOR-000", "Program is too short. Missing required structure.");
     }
 
     if (lines[0] != "SCRIPT AREA") {
-        cout << "Error: Missing SCRIPT AREA." << endl;
-        exit(1);
+        error("LEXOR-001",
+              "Expected 'SCRIPT AREA' at the beginning of program, found: " + lines[0], 1);
     }
 
     if (lines[1] != "START SCRIPT") {
-        cout << "Error: Missing START SCRIPT." << endl;
-        exit(1);
+        error("LEXOR-002",
+              "Expected 'START SCRIPT' after SCRIPT AREA, found: " + lines[1], 2);
     }
 
     if (lines.back() != "END SCRIPT") {
-        cout << "Error: Missing END SCRIPT." << endl;
-        exit(1);
+        error("LEXOR-003",
+              "Expected 'END SCRIPT' at end of program, found: " + lines.back(),
+              lines.size());
     }
 }
 
