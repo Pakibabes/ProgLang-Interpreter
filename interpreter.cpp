@@ -2,9 +2,11 @@
 #include "interpreter.h"
 #include <iostream>
 #include <algorithm>
+#include <locale> // for smart quotes
 #include <stdexcept>
 
 using namespace std;
+//helper functions
 // remove spacing
 string trim (string str){
     int start = str.find_first_not_of(" \t");
@@ -15,6 +17,47 @@ string trim (string str){
     return str.substr(start, end-start + 1);
 }
 
+bool startsWith(const string& str, const string& prefix) {
+    return str.rfind(prefix, 0) == 0;
+}
+
+bool endsWith(const string& str, const string& suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+bool isExpression(string value) {
+    return value.find('+') != string::npos ||
+           value.find('-') != string::npos ||
+           value.find('*') != string::npos ||
+           value.find('/') != string::npos ||
+           value.find('(') != string::npos;
+}
+
+string normalizeQuotes(string value) {
+    value = trim(value);
+    if (value.empty()) return value;
+
+    if ((value.front() == '"' && value.back() == '"') ||
+        (value.front() == '\'' && value.back() == '\'')) {
+        return value.substr(1, value.size() - 2);
+    }
+    string openD = "”"; string closeD = "”";
+    string openS = "’"; string closeS = "’";
+
+    if (value.size() >= 6) { 
+        if (startsWith(value, openD) && endsWith(value, closeD)) {
+            return value.substr(3, value.size() - 6);
+        }
+        if (startsWith(value, openS) && endsWith(value, closeS)) {
+            return value.substr(3, value.size() - 6);
+        }
+    }
+
+    return value;
+}
+
+// main functnions
 Interpreter::Interpreter(vector<string> programLines) {
 
     lines = programLines;
@@ -26,7 +69,7 @@ void Interpreter::run() {
     validateStructure();
 
     
-    cout << "LEXOR program structure is valid." << endl;
+    cout << "LEXOR program structure is valid." << endl; // validates if naaay START SCRIPT, SCRIPT AREA, ug END SCRIPT
 
     processDeclarations();
     processAssignments();
@@ -92,11 +135,7 @@ void Interpreter::processDeclarations(){
                 if (equalPos != string::npos) {
                     string name = trim(var.substr(0, equalPos));
                     string value = trim(var.substr(equalPos + 1));
-                    if ((value.front() == '"' && value.back() == '"') ||
-                        (value.front() == '\'' && value.back() == '\'')) {
-
-                        value = value.substr(1, value.size() - 2);
-                    }
+                    value = normalizeQuotes(value);
                     symbolTable[name] = value;
                     typeTable[name] = type;
                 }
@@ -104,8 +143,10 @@ void Interpreter::processDeclarations(){
                     string name = trim(var);
                     if (type == "INT" || type == "FLOAT")
                         symbolTable[name] = "0";
-                    else if (type == "BOOL")
+                    else if (type == "BOOL"){
+                        
                         symbolTable[name] = "FALSE";
+                    }
                     else if (type == "CHAR")
                         symbolTable[name] = "";
 
@@ -122,7 +163,7 @@ void Interpreter::processDeclarations(){
 
 void Interpreter::processAssignments(){
     for (int i = 2; i < lines.size(); i++){
-        string line = lines[i];
+        string line = trim(lines[i]);
 
         if(line.find("DECLARE") == 0) continue;
         if(line.find("PRINT") == 0) continue;
@@ -137,14 +178,15 @@ void Interpreter::processAssignments(){
                 }else temp += c;
             }
             parts.push_back(trim(temp));
-            string value = parts.back();
-            if ((value.front() == '"' && value.back() == '"') ||
-                (value.front() == '\'' && value.back() == '\'')) {
-
-                value = value.substr(1, value.size() - 2);
+            string value = trim(parts.back());
+            if(isExpression(value)){
+                value = replaceVariables(value);
+                cout << "After replace: " << value << endl;
             }
+            value = normalizeQuotes(value);
+            
             for (int j = parts.size() - 2; j >= 0; j--) {
-                string var = parts[j];
+                string var = trim(parts[j]);
                 // if value is another variable
                 if (symbolTable.find(value) != symbolTable.end()) {
                     value = symbolTable[value];
@@ -157,28 +199,40 @@ void Interpreter::processAssignments(){
 }
 
 void Interpreter::processPrint(){
+    setlocale(LC_ALL, "en_US.UTF-8");
     for(string line : lines){
         if(line.find("PRINT:")==0){
             string content = trim(line.substr(6));
             string part="";
             for ( int i = 0; i <= content.length(); i++ ){
                 if ( i == content.length() || content[i] =='&'){
+                    
                     string token = trim(part);
-                    // newline
-                    if (token == "$") cout << endl;
-                    // special characters
-                    else if (token.size() >= 2 && token.front() == '[' && token.back() == ']')cout << token.substr(1, token.size() - 2);
-                    // variables
-                    else if(symbolTable.find(token) != symbolTable.end()) cout << symbolTable[token];
-                    // just pure string
-                    else{
-                        if((token.front() == '"' && token.back() == '"') ||
-                           (token.front() == '\'' && token.back() == '\''))cout << token.substr(1, token.size() - 2);
-                        else if((token.front() == '"' && token.back() != '"')) throw runtime_error("Kuwang ug uwahi na QUOTA : At line ");
-                        else if((token.front() == '\'' && token.back() != '\'')) throw runtime_error("Kuwang ug usa ka uwahi na QUOTA : At line ");
-                        else if((token.front() != '"' && token.back() == '"')) throw runtime_error("Kuwang ug kinaunhan na QUOTA : At line ");
-                        else if((token.front() != '\'' && token.back() == '\'')) throw runtime_error("Kuwang ug usa ka kinaunhan na QUOTA : At line ");
-                        else cout << token;
+
+                    // normalize quotes here
+                    if (
+                        (startsWith(token, "\"") && endsWith(token, "\"")) ||
+                        (startsWith(token, "'") && endsWith(token, "'"))
+                    ) {
+                        token = token.substr(1, token.size() - 2);
+                    }
+                    else if (
+                        (startsWith(token, "”") && endsWith(token, "”")) ||
+                        (startsWith(token, "’") && endsWith(token, "’"))
+                    ) {
+                        token = token.substr(3, token.size() - 6);
+                    }
+                    if (token == "$") {
+                        cout << endl;
+                    }
+                    else if (token.size() >= 2 && token.front() == '[' && token.back() == ']') {
+                        cout << token.substr(1, token.size() - 2);
+                    }
+                    else if (symbolTable.find(token) != symbolTable.end()) {
+                        cout << symbolTable[token];
+                    }
+                    else {
+                        cout << token;
                     }
                     part = "";
                 }else part+= content[i];
@@ -186,4 +240,32 @@ void Interpreter::processPrint(){
             cout << endl;
         }
     }
+}
+string Interpreter::replaceVariables(string expr) {
+    string result = "";
+    string current = "";
+
+    for (int i = 0; i < expr.length(); i++) {
+        char c = expr[i];
+        if (isalnum(c) || c == '_') {
+            current += c;
+        }
+        else {
+            if (!current.empty()) {
+                if (symbolTable.find(current) != symbolTable.end()) {
+                    result += symbolTable[current]; // replace with value
+                } else {
+                    result += current; // just in case
+                }
+                current = "";
+            }
+            result += c; // keep operator
+        }
+    }
+    if (!current.empty()) {
+        if (symbolTable.find(current) != symbolTable.end())result += symbolTable[current];
+        else result += current;
+    }
+
+    return result;
 }
