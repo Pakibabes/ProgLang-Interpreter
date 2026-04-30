@@ -361,7 +361,12 @@ void Interpreter::processPrint() {
                     cout << symbolTable[token];
                 }
                 else {
-                    cout << token;
+                    if (symbolTable.find(token) != symbolTable.end()) {
+                        cout << symbolTable[token];
+                        } else {
+                            error("LEXOR-011",
+                                     "Undefined variable or missing quotes: " + token);
+                            }
                 }
             }
         }

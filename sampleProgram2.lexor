@@ -2,5 +2,5 @@ SCRIPT AREA
 START SCRIPT
     DECLARE INT x = 8
     DECLARE INT y = 9
-    PRINT: x & y & "hello" & $ & "yeah"
+    PRINT: x & y & hello & $ & "yeah"
 END SCRIPT
