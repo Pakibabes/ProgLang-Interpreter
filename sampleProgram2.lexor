@@ -1,6 +1,6 @@
-SCRIPT AREA
-START SCRIPT
-    DECLARE INT x = 8
-    DECLARE INT y = 9
-    PRINT: x & y & "yeah"
+%% this is a sample program in LEXOR 
+SCRIPT AREA 
+START SCRIPT    
+DECLARE CHAR g = 'a'
+PRINT: g
 END SCRIPT

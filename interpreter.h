@@ -29,7 +29,7 @@ public:
     void processPrint();
     void validateOneStatementPerLine();
     void validateDeclarationOrder();
-
+    void validateStatements();
     string replaceVariables(string expr);
     
 };
