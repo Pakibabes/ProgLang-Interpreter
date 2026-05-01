@@ -1,8 +1,6 @@
 SCRIPT AREA
 START SCRIPT
-DECLARE INT x = 2
-DECLARE INT y = 3
-PRINT: Hey asd %%they 
-DECLARE INT l = 2
-PRINT: jump
+    DECLARE INT x = 8
+    DECLARE INT y = 9
+    PRINT: x & y & "yeah"
 END SCRIPT
