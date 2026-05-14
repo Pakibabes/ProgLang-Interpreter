@@ -1,6 +1,3 @@
-%% this is a sample program in LEXOR 
-SCRIPT AREA 
-START SCRIPT    
-DECLARE CHAR g = 'a'
-PRINT: g
+SCRIPT AREA
+START script
 END SCRIPT
