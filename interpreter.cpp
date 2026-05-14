@@ -10,30 +10,19 @@
 #include <cctype>
 
 using namespace std;
-
-// ═════════════════════════════════════════════════════════════
-//  Constructor & run
-// ═════════════════════════════════════════════════════════════
 Interpreter::Interpreter(const vector<string>& programLines)
     : lines(programLines) {}
 
 void Interpreter::run() {
-    // 1. Lex
     Lexer lexer(lines);
     lexer.tokenize();
     const vector<Token>& tokens = lexer.getTokens();
 
-    // 2. Parse  → Statement list
     Parser parser(tokens);
     vector<Statement> stmts = parser.parse();
 
-    // 3. Execute
     execute(stmts);
 }
-
-// ═════════════════════════════════════════════════════════════
-//  Statement executor
-// ═════════════════════════════════════════════════════════════
 void Interpreter::execute(const vector<Statement>& stmts) {
     for (const Statement& s : stmts) {
         switch (s.type) {
@@ -48,31 +37,22 @@ void Interpreter::execute(const vector<Statement>& stmts) {
         }
     }
 }
-
-// ─────────────────────────────────────────────────────────────
-//  DECLARE
-// ─────────────────────────────────────────────────────────────
 void Interpreter::execDeclare(const Statement& s) {
     for (const VarDecl& vd : s.declarations) {
 
-        // Validate identifier
         if (vd.name.empty() || !(isalpha(vd.name[0]) || vd.name[0] == '_'))
             error("LEXOR-007", "Invalid variable name: " + vd.name, s.line);
 
-        // Already declared?
         if (typeTable.count(vd.name))
             error("LEXOR-008", "Variable already declared: " + vd.name, s.line);
 
         typeTable[vd.name] = s.dataType;
 
         if (vd.hasInit) {
-            // The initValue is the raw token string,
-            // e.g. "\"TRUE\"", "'c'", "-3.98", "5"
             string raw = trim(vd.initValue);
             string val;
 
             if (s.dataType == "CHAR") {
-                // Expect 'x'
                 if (raw.size() >= 3 && raw.front() == '\'' && raw.back() == '\'')
                     val = string(1, raw[1]);
                 else
@@ -81,7 +61,6 @@ void Interpreter::execDeclare(const Statement& s) {
                           + raw, s.line);
             }
             else if (s.dataType == "BOOL") {
-                // Expect "TRUE" or "FALSE"
                 if (raw == "\"TRUE\"" || raw == "TRUE")       val = "TRUE";
                 else if (raw == "\"FALSE\"" || raw == "FALSE") val = "FALSE";
                 else error("LEXOR-013",
@@ -89,7 +68,6 @@ void Interpreter::execDeclare(const Statement& s) {
                            + raw, s.line);
             }
             else {
-                // INT / FLOAT: evaluate expression
                 val = evaluate(raw, s.line);
             }
 
@@ -101,15 +79,9 @@ void Interpreter::execDeclare(const Statement& s) {
         }
     }
 }
-
-// ─────────────────────────────────────────────────────────────
-//  ASSIGN   a = b = expr
-// ─────────────────────────────────────────────────────────────
 void Interpreter::execAssign(const Statement& s) {
-    // Evaluate the RHS expression
     string val = evaluate(s.expr, s.line);
 
-    // Assign right-to-left (standard chained assignment semantics)
     for (int i = (int)s.targets.size() - 1; i >= 0; i--) {
         const string& var = s.targets[i];
 
@@ -121,9 +93,6 @@ void Interpreter::execAssign(const Statement& s) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
-//  PRINT
-// ─────────────────────────────────────────────────────────────
 void Interpreter::execPrint(const Statement& s) {
     cout << buildPrintOutput(s.printContent, s.line) << "\n";
 }
@@ -153,7 +122,6 @@ string Interpreter::buildPrintOutput(const string& content, int line) {
         if (symbolTable.count(tok)) {
             output += symbolTable[tok];
         } else {
-            // Could be a bare literal (shouldn't normally happen)
             output += tok;
         }
     };
@@ -161,7 +129,6 @@ string Interpreter::buildPrintOutput(const string& content, int line) {
     for (size_t i = 0; i < content.size(); i++) {
         char c = content[i];
 
-        // ── inside quotes ──────────────────────────────────
         if (inQuotes) {
             if (c == quoteChar) {
                 inQuotes = false;
@@ -171,7 +138,6 @@ string Interpreter::buildPrintOutput(const string& content, int line) {
             continue;
         }
 
-        // ── open quote ─────────────────────────────────────
         if (c == '"' || c == '\'') {
             flushBuffer();
             inQuotes  = true;
@@ -179,49 +145,39 @@ string Interpreter::buildPrintOutput(const string& content, int line) {
             continue;
         }
 
-        // ── newline token ──────────────────────────────────
         if (c == '$') {
             flushBuffer();
             output += '\n';
             continue;
         }
 
-        // ── concatenator ───────────────────────────────────
         if (c == '&') {
             flushBuffer();
             continue;
         }
 
-        // ── escape code  [<content>] ───────────────────────
         if (c == '[') {
             flushBuffer();
             string escaped;
             i++;
-            // Read until the CLOSING ] — but if the very first char
-            // is ] we treat that ] as the escaped content and the
-            // next ] as the closer.  E.g. []] → "]"
             if (i < content.size() && content[i] == ']') {
-                // peek one further: if another ] follows, this is []]
                 if (i + 1 < content.size() && content[i+1] == ']') {
                     escaped = "]";
-                    i += 2;  // skip both ]]
+                    i += 2;
                 } else {
-                    // just [] → empty escape
-                    i++;     // skip the single ]
+                    i++;
                 }
             } else {
                 while (i < content.size() && content[i] != ']') {
                     escaped += content[i++];
                 }
-                // i now points at ']' — consume it
                 if (i < content.size()) i++;
             }
             output += escaped;
-            i--;  // the for-loop will i++ again
+            i--;
             continue;
         }
 
-        // ── skip stray ] (already consumed in [ handling) ──
         if (c == ']') continue;
 
         buffer += c;
@@ -231,9 +187,8 @@ string Interpreter::buildPrintOutput(const string& content, int line) {
     return output;
 }
 
-// ─────────────────────────────────────────────────────────────
-//  SCAN
-// ─────────────────────────────────────────────────────────────
+//Implemented the SCAN Function
+
 void Interpreter::execScan(const Statement& s) {
     string inputLine;
     getline(cin, inputLine);
@@ -260,18 +215,12 @@ void Interpreter::execScan(const Statement& s) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
-//  IF
-// ─────────────────────────────────────────────────────────────
 void Interpreter::execIf(const Statement& s) {
     string condResult = evaluate(s.condition, s.line);
 
     if (condResult == "TRUE") {
         execute(s.body);
     } else {
-        // elseBody is either:
-        //   - a nested STMT_IF (ELSE IF)  → execute it as IF
-        //   - plain statements (ELSE)     → execute them
         if (!s.elseBody.empty()) {
             if (s.elseBody.size() == 1 && s.elseBody[0].type == STMT_IF) {
                 execIf(s.elseBody[0]);
@@ -282,12 +231,7 @@ void Interpreter::execIf(const Statement& s) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
-//  FOR
-// ─────────────────────────────────────────────────────────────
 void Interpreter::execFor(const Statement& s) {
-    // Execute init
-    // forInit looks like "i=0"  — create a fake assign statement
     {
         size_t eq = s.forInit.find('=');
         if (eq == string::npos)
@@ -301,7 +245,6 @@ void Interpreter::execFor(const Statement& s) {
         symbolTable[var] = val;
     }
 
-    // Loop
     int safety = 1000000;
     while (safety-- > 0) {
         string cond = evaluate(s.forCond, s.line);
@@ -309,7 +252,6 @@ void Interpreter::execFor(const Statement& s) {
 
         execute(s.body);
 
-        // Execute update
         size_t eq = s.forUpdate.find('=');
         if (eq == string::npos)
             error("PARSE-031", "FOR update must be an assignment", s.line);
@@ -320,9 +262,6 @@ void Interpreter::execFor(const Statement& s) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
-//  REPEAT WHEN  (while-loop: repeats while condition is true)
-// ─────────────────────────────────────────────────────────────
 void Interpreter::execRepeatWhen(const Statement& s) {
     int safety = 1000000;
     while (safety-- > 0) {
@@ -332,45 +271,29 @@ void Interpreter::execRepeatWhen(const Statement& s) {
     }
 }
 
-// ═════════════════════════════════════════════════════════════
-//  EXPRESSION EVALUATOR
-//  Handles:
-//    - arithmetic:  +, -, *, /, %,  unary -
-//    - comparison:  <, >, <=, >=, ==, <>
-//    - logical:     AND, OR, NOT
-//    - parentheses, variable substitution, literals
-// ═════════════════════════════════════════════════════════════
 string Interpreter::evaluate(const string& rawExpr, int line) {
     string expr = trim(rawExpr);
 
     if (expr.empty())
         error("LEXOR-030", "Empty expression", line);
 
-    // ── CHAR literal  'x' ─────────────────────────────────
     if (expr.size() >= 3 && expr.front() == '\'' && expr.back() == '\'')
         return string(1, expr[1]);
 
-    // ── STRING literal "…" ────────────────────────────────
     if (expr.size() >= 2 && expr.front() == '"' && expr.back() == '"')
         return expr.substr(1, expr.size() - 2);
 
-    // ── BOOL literal ─────────────────────────────────────
     if (expr == "TRUE" || expr == "FALSE") return expr;
 
-    // ── Single variable? ─────────────────────────────────
     if (symbolTable.count(expr)) return symbolTable[expr];
 
-    // ── Contains logical keywords? → logical evaluator ───
     if (expr.find(" AND ") != string::npos ||
         expr.find(" OR ")  != string::npos ||
         expr.find("NOT ")  != string::npos) {
         return evalLogical(expr, line);
     }
 
-    // ── Contains comparison operator? → boolean result ───
-    // We check for <>, >=, <=, ==, <, > (avoid confusing with arrows)
     auto hasComparison = [&]() {
-        // Simple scan: not inside parens
         int depth = 0;
         for (size_t i = 0; i < expr.size(); i++) {
             char c = expr[i];
@@ -389,8 +312,6 @@ string Interpreter::evaluate(const string& rawExpr, int line) {
     };
 
     if (hasComparison()) {
-        // Split on the comparison operator (outermost only)
-        // and evaluate both sides as arithmetic then compare
         auto splitComp = [&](const string& op) -> pair<string,string> {
             size_t p = expr.find(op);
             if (p == string::npos) return {"",""};
@@ -399,7 +320,6 @@ string Interpreter::evaluate(const string& rawExpr, int line) {
         };
 
         string lhs, rhs, op;
-        // Try two-char first
         for (auto& twoOp : vector<string>{"<>",">=","<=","=="}) {
             size_t p = expr.find(twoOp);
             if (p != string::npos) {
@@ -410,7 +330,6 @@ string Interpreter::evaluate(const string& rawExpr, int line) {
             }
         }
         if (op.empty()) {
-            // single-char < or >
             for (char sOp : {'<','>'}) {
                 size_t p = expr.find(sOp);
                 if (p != string::npos) {
@@ -436,23 +355,16 @@ string Interpreter::evaluate(const string& rawExpr, int line) {
         }
     }
 
-    // ── Arithmetic expression ─────────────────────────────
     string substituted = substituteVars(expr);
     double d = evalArith(substituted, line);
 
-    // Return as INT if no fractional part
     if (d == (long long)d) return to_string((long long)d);
 
-    // Return as FLOAT
     ostringstream oss;
     oss << d;
     return oss.str();
 }
 
-// ─────────────────────────────────────────────────────────────
-//  substituteVars
-//  Replaces every identifier token in `expr` with its value.
-// ─────────────────────────────────────────────────────────────
 string Interpreter::substituteVars(const string& expr) const {
     string result;
     string buf;
@@ -480,11 +392,6 @@ string Interpreter::substituteVars(const string& expr) const {
     return result;
 }
 
-// ─────────────────────────────────────────────────────────────
-//  evalLogical
-//  Handles AND, OR, NOT by splitting on those keywords.
-//  Recursive: sub-expressions are passed back to evaluate().
-// ─────────────────────────────────────────────────────────────
 string Interpreter::evalLogical(const string& expr, int line) {
     // Strip outer parens
     string e = trim(expr);
@@ -500,7 +407,6 @@ string Interpreter::evalLogical(const string& expr, int line) {
         else break;
     }
 
-    // --- NOT ---
     if (e.substr(0, 4) == "NOT ") {
         string sub = trim(e.substr(4));
         string val = evaluate(sub, line);
@@ -509,8 +415,6 @@ string Interpreter::evalLogical(const string& expr, int line) {
         return (val == "TRUE") ? "FALSE" : "TRUE";
     }
 
-    // --- Split on OR (lowest precedence) ---
-    // Scan for ' OR ' outside parentheses
     int depth = 0;
     for (size_t i = 0; i < e.size(); i++) {
         if (e[i]=='(') depth++;
@@ -522,7 +426,6 @@ string Interpreter::evalLogical(const string& expr, int line) {
         }
     }
 
-    // --- Split on AND ---
     depth = 0;
     for (size_t i = 0; i < e.size(); i++) {
         if (e[i]=='(') depth++;
@@ -534,13 +437,9 @@ string Interpreter::evalLogical(const string& expr, int line) {
         }
     }
 
-    // Fall through to regular evaluate (comparison or bool literal)
     return evaluate(e, line);
 }
 
-// ─────────────────────────────────────────────────────────────
-//  evalArith  —  shunting-yard algorithm
-// ─────────────────────────────────────────────────────────────
 int Interpreter::precedence(char op) {
     if (op=='+' || op=='-') return 1;
     if (op=='*' || op=='/' || op=='%') return 2;
@@ -656,9 +555,6 @@ double Interpreter::evalArith(const string& rawExpr, int line) {
     return vals.top();
 }
 
-// ═════════════════════════════════════════════════════════════
-//  Type checking
-// ═════════════════════════════════════════════════════════════
 void Interpreter::checkType(const string& var,
                              const string& value, int line) {
     const string& type = typeTable.at(var);
@@ -697,9 +593,6 @@ string Interpreter::defaultValue(const string& type) {
     return "";
 }
 
-// ═════════════════════════════════════════════════════════════
-//  Utility
-// ═════════════════════════════════════════════════════════════
 string Interpreter::trim(const string& s) {
     size_t b = s.find_first_not_of(" \t\r\n");
     if (b == string::npos) return "";

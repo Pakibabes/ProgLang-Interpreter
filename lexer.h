@@ -20,14 +20,12 @@ private:
     vector<string> lines;
     vector<Token>  tokens;
 
-    // ── character-level helpers ──────────────────
     static string  trim(const string& s);
     static bool    isIdentChar(char c, bool first);
 
-    // ── literal classifiers ──────────────────────
     static bool    isInteger (const string& s);
     static bool    isFloat   (const string& s);
-    static bool    isBool    (const string& s);  // TRUE / FALSE (unquoted)
+    static bool    isBool    (const string& s);
 
     // ── token emitters ───────────────────────────
     void emit(TokenType type, const string& value, int line);

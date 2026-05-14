@@ -6,11 +6,8 @@
 
 using namespace std;
 
-// ─────────────────────────────────────────
-//  TOKEN TYPES
-// ─────────────────────────────────────────
+
 enum TokenType {
-    // Structure keywords (multi-word treated as single token)
     TOKEN_SCRIPT_AREA,   // "SCRIPT AREA"
     TOKEN_START_SCRIPT,  // "START SCRIPT"
     TOKEN_END_SCRIPT,    // "END SCRIPT"
@@ -80,23 +77,18 @@ enum TokenType {
     TOKEN_LBRACKET, // [
     TOKEN_RBRACKET, // ]
 
-    TOKEN_NEWLINE,   // end-of-line marker emitted by Lexer
+    TOKEN_NEWLINE, 
     TOKEN_EOF,
     TOKEN_UNKNOWN
 };
 
-// ─────────────────────────────────────────
-//  TOKEN STRUCT
-// ─────────────────────────────────────────
+
 struct Token {
     TokenType   type;
     string      value;
     int         line;
 };
 
-// ─────────────────────────────────────────
-//  STATEMENT TYPES
-// ─────────────────────────────────────────
 enum StatementType {
     STMT_DECLARE,
     STMT_ASSIGN,
@@ -106,58 +98,41 @@ enum StatementType {
     STMT_FOR,
     STMT_REPEAT_WHEN,
 
-    // Structural (kept so the interpreter can skip them cleanly)
     STMT_SCRIPT_AREA,
     STMT_START_SCRIPT,
     STMT_END_SCRIPT
 };
 
-// One variable declaration entry
 struct VarDecl {
     string name;
-    string initValue;  // raw literal string; empty if no initialiser
+    string initValue;
     bool   hasInit;
 };
 
-// ─────────────────────────────────────────
-//  STATEMENT STRUCT
-// ─────────────────────────────────────────
 struct Statement {
     StatementType       type;
     int                 line = -1;
 
-    // ── DECLARE ──────────────────────────
-    string              dataType;       // "INT" | "FLOAT" | "BOOL" | "CHAR"
+    string              dataType;
     vector<VarDecl>     declarations;
 
-    // ── ASSIGN ───────────────────────────
-    // Supports chained assignment: a = b = <expr>
-    vector<string>      targets;        // left-hand side variables (in order)
-    string              expr;           // raw RHS expression string
+    vector<string>      targets;
+    string              expr; 
 
-    // ── PRINT ────────────────────────────
-    string              printContent;   // everything after "PRINT:"
+    string              printContent;
 
     // ── SCAN ─────────────────────────────
     vector<string>      scanVars;
 
-    // ── IF / ELSE IF / REPEAT WHEN ───────
-    string              condition;      // raw boolean expression string
+    string              condition;
+    string              forInit;
+    string              forCond;
+    string              forUpdate;
 
-    // ── FOR ──────────────────────────────
-    string              forInit;        // raw init  expression  (e.g. "i=0")
-    string              forCond;        // raw loop  condition
-    string              forUpdate;      // raw update expression (e.g. "i=i+1")
-
-    // ── Block bodies ─────────────────────
-    vector<Statement>   body;           // main / true branch
-    vector<Statement>   elseBody;       // else / false branch
-    //   ELSE-IF chains are stored as a nested STMT_IF inside elseBody
+    vector<Statement>   body;
+    vector<Statement>   elseBody;
 };
 
-// ─────────────────────────────────────────
-//  GLOBAL ERROR HELPER  (defined in common.cpp)
-// ─────────────────────────────────────────
 void error(const string& code, const string& message, int line = -1);
 
-#endif // COMMON_H
+#endif 

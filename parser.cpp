@@ -4,14 +4,8 @@
 
 using namespace std;
 
-// ═════════════════════════════════════════════════════════════
-//  Constructor
-// ═════════════════════════════════════════════════════════════
 Parser::Parser(const vector<Token>& tokens) : toks(tokens), pos(0) {}
 
-// ═════════════════════════════════════════════════════════════
-//  Token navigation helpers
-// ═════════════════════════════════════════════════════════════
 const Token& Parser::peek(int offset) const {
     int idx = pos + offset;
     if (idx >= (int)toks.size()) return toks.back(); // EOF
@@ -43,9 +37,6 @@ bool Parser::atEnd() const {
     return peek().type == TOKEN_EOF;
 }
 
-// ═════════════════════════════════════════════════════════════
-//  Entry point
-// ═════════════════════════════════════════════════════════════
 vector<Statement> Parser::parse() {
 
     // 1. Require SCRIPT AREA
@@ -88,9 +79,6 @@ vector<Statement> Parser::parse() {
     return stmts;
 }
 
-// ═════════════════════════════════════════════════════════════
-//  Statement dispatcher
-// ═════════════════════════════════════════════════════════════
 Statement Parser::parseStatement() {
 
     TokenType t = peek().type;
@@ -106,10 +94,6 @@ Statement Parser::parseStatement() {
     return parseAssignOrExpr();
 }
 
-// ═════════════════════════════════════════════════════════════
-//  DECLARE
-//  Syntax: DECLARE <TYPE> <varDeclList>
-// ═════════════════════════════════════════════════════════════
 Statement Parser::parseDeclare() {
     Statement s;
     s.type = STMT_DECLARE;
@@ -129,15 +113,10 @@ Statement Parser::parseDeclare() {
     return s;
 }
 
-// ─────────────────────────────────────────────────────────────
-//  Helper: parse  x, y=5, z='a'
-//  Stops when we run out of identifiers / commas
-// ─────────────────────────────────────────────────────────────
 vector<VarDecl> Parser::parseVarDeclList() {
     vector<VarDecl> list;
 
     while (true) {
-        // Skip any stray newlines between declarators (shouldn't happen, but safe)
         while (match(TOKEN_NEWLINE)) {}
 
         if (!check(TOKEN_IDENTIFIER))
@@ -177,8 +156,6 @@ vector<VarDecl> Parser::parseVarDeclList() {
 
         list.push_back(vd);
 
-        // Only continue if next is a comma (still on same line —
-        // newline would have already stopped the value collection)
         if (!check(TOKEN_COMMA)) break;
         advance();  // consume ','
     }
@@ -186,19 +163,11 @@ vector<VarDecl> Parser::parseVarDeclList() {
     return list;
 }
 
-// ═════════════════════════════════════════════════════════════
-//  ASSIGN  (also handles chained:  a = b = expr)
-// ═════════════════════════════════════════════════════════════
 Statement Parser::parseAssignOrExpr() {
     Statement s;
     s.type = STMT_ASSIGN;
     s.line = peek().line;
 
-    // Look ahead to detect the pattern:  IDENT = IDENT = ...
-    // We collect all leading  IDENT =  pairs as targets, then
-    // everything else is the RHS expression.
-
-    // First token must be an identifier
     if (!check(TOKEN_IDENTIFIER))
         error("PARSE-020", "Unexpected token: '" + peek().value + "'", peek().line);
 
@@ -216,10 +185,6 @@ Statement Parser::parseAssignOrExpr() {
     return s;
 }
 
-// ═════════════════════════════════════════════════════════════
-//  PRINT
-//  Syntax: PRINT: <content>
-// ═════════════════════════════════════════════════════════════
 Statement Parser::parsePrint() {
     Statement s;
     s.type = STMT_PRINT;
@@ -228,7 +193,6 @@ Statement Parser::parsePrint() {
     expect(TOKEN_PRINT,  "Expected 'PRINT'");
     expect(TOKEN_COLON,  "Expected ':' after PRINT");
 
-    // Collect everything until end of line or a structural keyword
     string content;
     while (!atEnd()
            && !check(TOKEN_NEWLINE)
@@ -266,10 +230,7 @@ Statement Parser::parsePrint() {
     return s;
 }
 
-// ═════════════════════════════════════════════════════════════
-//  SCAN
-//  Syntax: SCAN: <var> [, <var>]*
-// ═════════════════════════════════════════════════════════════
+
 Statement Parser::parseScan() {
     Statement s;
     s.type = STMT_SCAN;
@@ -282,9 +243,6 @@ Statement Parser::parseScan() {
     return s;
 }
 
-// ═════════════════════════════════════════════════════════════
-//  IF / ELSE IF / ELSE
-// ═════════════════════════════════════════════════════════════
 Statement Parser::parseIf() {
     Statement s;
     s.type = STMT_IF;
@@ -300,7 +258,6 @@ Statement Parser::parseIf() {
     expect(TOKEN_START_IF, "Expected 'START IF'");
     while (match(TOKEN_NEWLINE)) {}
 
-    // Parse true-branch body until END IF / ELSE IF / ELSE
     s.body = parseBlock({TOKEN_END_IF, TOKEN_ELSE_IF, TOKEN_ELSE});
 
     // ELSE IF chain
@@ -324,7 +281,6 @@ Statement Parser::parseIf() {
         if (check(TOKEN_END_IF)) break;
     }
 
-    // ELSE
     if (check(TOKEN_ELSE)) {
         advance();  // consume ELSE
         while (match(TOKEN_NEWLINE)) {}
@@ -345,13 +301,6 @@ Statement Parser::parseIf() {
     return s;
 }
 
-// ═════════════════════════════════════════════════════════════
-//  FOR
-//  Syntax: FOR (<init>, <condition>, <update>)
-//          START FOR
-//            …
-//          END FOR
-// ═════════════════════════════════════════════════════════════
 Statement Parser::parseFor() {
     Statement s;
     s.type = STMT_FOR;
@@ -379,13 +328,6 @@ Statement Parser::parseFor() {
     return s;
 }
 
-// ═════════════════════════════════════════════════════════════
-//  REPEAT WHEN
-//  Syntax: REPEAT WHEN (<condition>)
-//          START REPEAT
-//            …
-//          END REPEAT
-// ═════════════════════════════════════════════════════════════
 Statement Parser::parseRepeatWhen() {
     Statement s;
     s.type = STMT_REPEAT_WHEN;
@@ -406,11 +348,6 @@ Statement Parser::parseRepeatWhen() {
     return s;
 }
 
-// ═════════════════════════════════════════════════════════════
-//  parseBlock
-//  Parses statements until one of the stop tokens is seen.
-//  Does NOT consume the stop token.
-// ═════════════════════════════════════════════════════════════
 vector<Statement> Parser::parseBlock(const vector<TokenType>& stopTokens) {
     vector<Statement> body;
 
@@ -421,7 +358,7 @@ vector<Statement> Parser::parseBlock(const vector<TokenType>& stopTokens) {
     };
 
     while (!isStop()) {
-        while (match(TOKEN_NEWLINE)) {}   // skip blank lines inside blocks
+        while (match(TOKEN_NEWLINE)) {}
         if (isStop()) break;
         body.push_back(parseStatement());
         while (match(TOKEN_NEWLINE)) {}
@@ -430,17 +367,12 @@ vector<Statement> Parser::parseBlock(const vector<TokenType>& stopTokens) {
     return body;
 }
 
-// ═════════════════════════════════════════════════════════════
-//  collectExpression
-//  Rebuilds a raw expression string from the token stream
-//  until a stop token (or EOF) is reached.
-// ═════════════════════════════════════════════════════════════
 string Parser::collectExpression(const vector<TokenType>& stopAt) {
     string expr;
 
     auto isStop = [&]() {
         if (atEnd()) return true;
-        if (check(TOKEN_NEWLINE)) return true;   // always stop at end-of-line
+        if (check(TOKEN_NEWLINE)) return true;
         for (TokenType st : stopAt)
             if (check(st)) return true;
         return false;
@@ -451,8 +383,6 @@ string Parser::collectExpression(const vector<TokenType>& stopAt) {
         const Token& tok = advance();
 
         if (!first) {
-            // Add a space between tokens for readability / safety
-            // (evaluator trims internally)
             switch (tok.type) {
                 case TOKEN_RPAREN:
                 case TOKEN_LBRACKET:
@@ -476,17 +406,12 @@ string Parser::collectExpression(const vector<TokenType>& stopAt) {
         }
     }
 
-    // Trim trailing/leading whitespace
     size_t s = expr.find_first_not_of(" \t");
     size_t e = expr.find_last_not_of (" \t");
     if (s == string::npos) return "";
     return expr.substr(s, e - s + 1);
 }
 
-// ═════════════════════════════════════════════════════════════
-//  parseIdentifierList
-//  Parses: ident [, ident]*
-// ═════════════════════════════════════════════════════════════
 vector<string> Parser::parseIdentifierList() {
     vector<string> list;
 
