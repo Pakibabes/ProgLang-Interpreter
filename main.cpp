@@ -34,5 +34,5 @@ int main(int argc, char* argv[]) {
 
 // Running the program
 // g++ is the compiler main  and interpreter needs to be compiled
-// g++ main.cpp interpreter.cpp -o lexor
-// ./lexor
+// g++ -std=c++17 -o lexor main.cpp common.cpp lexer.cpp parser.cpp interpreter.cpp
+// ./lexor sampleProgram2.lexor
