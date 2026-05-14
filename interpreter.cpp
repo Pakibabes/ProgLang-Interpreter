@@ -1,750 +1,727 @@
-// executes statements
 #include "interpreter.h"
-#include <iostream>
-#include <algorithm>
-#include <locale> // for smart quotes
-#include <stdexcept>
-#include <set>
+#include "lexer.h"
+#include "parser.h"
 
-//temporary for evaluationg expressions
+#include <iostream>
 #include <sstream>
+#include <stdexcept>
+#include <cmath>
 #include <stack>
 #include <cctype>
-#include <cmath>
 
 using namespace std;
 
+// ═════════════════════════════════════════════════════════════
+//  Constructor & run
+// ═════════════════════════════════════════════════════════════
+Interpreter::Interpreter(const vector<string>& programLines)
+    : lines(programLines) {}
 
-set<string> reservedWords = {
-    "SCRIPT", "AREA",
-    "START", "END",
-    "SCRIPT", "DECLARE",
-    "PRINT", "INT", "CHAR", "BOOL", "FLOAT"
-};
+void Interpreter::run() {
+    // 1. Lex
+    Lexer lexer(lines);
+    lexer.tokenize();
+    const vector<Token>& tokens = lexer.getTokens();
 
+    // 2. Parse  → Statement list
+    Parser parser(tokens);
+    vector<Statement> stmts = parser.parse();
 
-//helper functions
-// remove spacing
-string trim (string str){
-    int start = str.find_first_not_of(" \t");
-    int end = str.find_last_not_of(" \t");
-
-    if (start == -1) return "";
-
-    return str.substr(start, end-start + 1);
+    // 3. Execute
+    execute(stmts);
 }
-//errors
-void error(const string& code, const string& message, int line = -1) {
-    cout << "LEXOR Error [" << code << "]\n";
-    if (line != -1) {
-        cout << "Line " << line << ": ";
+
+// ═════════════════════════════════════════════════════════════
+//  Statement executor
+// ═════════════════════════════════════════════════════════════
+void Interpreter::execute(const vector<Statement>& stmts) {
+    for (const Statement& s : stmts) {
+        switch (s.type) {
+            case STMT_DECLARE:      execDeclare(s);     break;
+            case STMT_ASSIGN:       execAssign(s);      break;
+            case STMT_PRINT:        execPrint(s);       break;
+            case STMT_SCAN:         execScan(s);        break;
+            case STMT_IF:           execIf(s);          break;
+            case STMT_FOR:          execFor(s);         break;
+            case STMT_REPEAT_WHEN:  execRepeatWhen(s);  break;
+            default: break;
+        }
     }
-    cout << message << endl;
-    exit(1);
 }
 
-// TEMPORARY to solve expressions
-double applyOp(double a, double b, char op) {
+// ─────────────────────────────────────────────────────────────
+//  DECLARE
+// ─────────────────────────────────────────────────────────────
+void Interpreter::execDeclare(const Statement& s) {
+    for (const VarDecl& vd : s.declarations) {
+
+        // Validate identifier
+        if (vd.name.empty() || !(isalpha(vd.name[0]) || vd.name[0] == '_'))
+            error("LEXOR-007", "Invalid variable name: " + vd.name, s.line);
+
+        // Already declared?
+        if (typeTable.count(vd.name))
+            error("LEXOR-008", "Variable already declared: " + vd.name, s.line);
+
+        typeTable[vd.name] = s.dataType;
+
+        if (vd.hasInit) {
+            // The initValue is the raw token string,
+            // e.g. "\"TRUE\"", "'c'", "-3.98", "5"
+            string raw = trim(vd.initValue);
+            string val;
+
+            if (s.dataType == "CHAR") {
+                // Expect 'x'
+                if (raw.size() >= 3 && raw.front() == '\'' && raw.back() == '\'')
+                    val = string(1, raw[1]);
+                else
+                    error("LEXOR-014",
+                          "CHAR initialiser must be a single-quoted character: "
+                          + raw, s.line);
+            }
+            else if (s.dataType == "BOOL") {
+                // Expect "TRUE" or "FALSE"
+                if (raw == "\"TRUE\"" || raw == "TRUE")       val = "TRUE";
+                else if (raw == "\"FALSE\"" || raw == "FALSE") val = "FALSE";
+                else error("LEXOR-013",
+                           "BOOL initialiser must be \"TRUE\" or \"FALSE\": "
+                           + raw, s.line);
+            }
+            else {
+                // INT / FLOAT: evaluate expression
+                val = evaluate(raw, s.line);
+            }
+
+            checkType(vd.name, val, s.line);
+            symbolTable[vd.name] = val;
+        }
+        else {
+            symbolTable[vd.name] = defaultValue(s.dataType);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  ASSIGN   a = b = expr
+// ─────────────────────────────────────────────────────────────
+void Interpreter::execAssign(const Statement& s) {
+    // Evaluate the RHS expression
+    string val = evaluate(s.expr, s.line);
+
+    // Assign right-to-left (standard chained assignment semantics)
+    for (int i = (int)s.targets.size() - 1; i >= 0; i--) {
+        const string& var = s.targets[i];
+
+        if (!typeTable.count(var))
+            error("LEXOR-009", "Undeclared variable: " + var, s.line);
+
+        checkType(var, val, s.line);
+        symbolTable[var] = val;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PRINT
+// ─────────────────────────────────────────────────────────────
+void Interpreter::execPrint(const Statement& s) {
+    cout << buildPrintOutput(s.printContent, s.line) << "\n";
+}
+
+// ─────────────────────────────────────────────────────────────
+//  buildPrintOutput
+//  Processes the raw printContent string:
+//    &   = concatenator (separator token, ignored structurally)
+//    $   = newline
+//    [x] = escape code: prints x literally (e.g. [[] prints "[")
+//    []  = empty escape (prints nothing — used in spec examples)
+//    "…" = string literal
+//    var = variable lookup
+// ─────────────────────────────────────────────────────────────
+string Interpreter::buildPrintOutput(const string& content, int line) {
+    string output;
+    string buffer;
+    bool inQuotes = false;
+    char quoteChar = 0;
+
+    auto flushBuffer = [&]() {
+        string tok = trim(buffer);
+        buffer.clear();
+        if (tok.empty()) return;
+
+        // Variable lookup
+        if (symbolTable.count(tok)) {
+            output += symbolTable[tok];
+        } else {
+            // Could be a bare literal (shouldn't normally happen)
+            output += tok;
+        }
+    };
+
+    for (size_t i = 0; i < content.size(); i++) {
+        char c = content[i];
+
+        // ── inside quotes ──────────────────────────────────
+        if (inQuotes) {
+            if (c == quoteChar) {
+                inQuotes = false;
+            } else {
+                output += c;
+            }
+            continue;
+        }
+
+        // ── open quote ─────────────────────────────────────
+        if (c == '"' || c == '\'') {
+            flushBuffer();
+            inQuotes  = true;
+            quoteChar = c;
+            continue;
+        }
+
+        // ── newline token ──────────────────────────────────
+        if (c == '$') {
+            flushBuffer();
+            output += '\n';
+            continue;
+        }
+
+        // ── concatenator ───────────────────────────────────
+        if (c == '&') {
+            flushBuffer();
+            continue;
+        }
+
+        // ── escape code  [<content>] ───────────────────────
+        if (c == '[') {
+            flushBuffer();
+            string escaped;
+            i++;
+            // Read until the CLOSING ] — but if the very first char
+            // is ] we treat that ] as the escaped content and the
+            // next ] as the closer.  E.g. []] → "]"
+            if (i < content.size() && content[i] == ']') {
+                // peek one further: if another ] follows, this is []]
+                if (i + 1 < content.size() && content[i+1] == ']') {
+                    escaped = "]";
+                    i += 2;  // skip both ]]
+                } else {
+                    // just [] → empty escape
+                    i++;     // skip the single ]
+                }
+            } else {
+                while (i < content.size() && content[i] != ']') {
+                    escaped += content[i++];
+                }
+                // i now points at ']' — consume it
+                if (i < content.size()) i++;
+            }
+            output += escaped;
+            i--;  // the for-loop will i++ again
+            continue;
+        }
+
+        // ── skip stray ] (already consumed in [ handling) ──
+        if (c == ']') continue;
+
+        buffer += c;
+    }
+
+    flushBuffer();
+    return output;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SCAN
+// ─────────────────────────────────────────────────────────────
+void Interpreter::execScan(const Statement& s) {
+    string inputLine;
+    getline(cin, inputLine);
+
+    // Split on commas
+    vector<string> values;
+    stringstream ss(inputLine);
+    string token;
+    while (getline(ss, token, ','))
+        values.push_back(trim(token));
+
+    if (values.size() != s.scanVars.size())
+        error("LEXOR-020",
+              "SCAN expected " + to_string(s.scanVars.size()) +
+              " value(s), got " + to_string(values.size()), s.line);
+
+    for (size_t i = 0; i < s.scanVars.size(); i++) {
+        const string& var = s.scanVars[i];
+        if (!typeTable.count(var))
+            error("LEXOR-009", "Undeclared variable: " + var, s.line);
+
+        checkType(var, values[i], s.line);
+        symbolTable[var] = values[i];
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  IF
+// ─────────────────────────────────────────────────────────────
+void Interpreter::execIf(const Statement& s) {
+    string condResult = evaluate(s.condition, s.line);
+
+    if (condResult == "TRUE") {
+        execute(s.body);
+    } else {
+        // elseBody is either:
+        //   - a nested STMT_IF (ELSE IF)  → execute it as IF
+        //   - plain statements (ELSE)     → execute them
+        if (!s.elseBody.empty()) {
+            if (s.elseBody.size() == 1 && s.elseBody[0].type == STMT_IF) {
+                execIf(s.elseBody[0]);
+            } else {
+                execute(s.elseBody);
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  FOR
+// ─────────────────────────────────────────────────────────────
+void Interpreter::execFor(const Statement& s) {
+    // Execute init
+    // forInit looks like "i=0"  — create a fake assign statement
+    {
+        size_t eq = s.forInit.find('=');
+        if (eq == string::npos)
+            error("PARSE-030", "FOR initializer must be an assignment", s.line);
+
+        string var = trim(s.forInit.substr(0, eq));
+        string val = evaluate(trim(s.forInit.substr(eq + 1)), s.line);
+
+        if (!typeTable.count(var))
+            error("LEXOR-009", "Undeclared variable in FOR: " + var, s.line);
+        symbolTable[var] = val;
+    }
+
+    // Loop
+    int safety = 1000000;
+    while (safety-- > 0) {
+        string cond = evaluate(s.forCond, s.line);
+        if (cond != "TRUE") break;
+
+        execute(s.body);
+
+        // Execute update
+        size_t eq = s.forUpdate.find('=');
+        if (eq == string::npos)
+            error("PARSE-031", "FOR update must be an assignment", s.line);
+
+        string var = trim(s.forUpdate.substr(0, eq));
+        string val = evaluate(trim(s.forUpdate.substr(eq + 1)), s.line);
+        symbolTable[var] = val;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  REPEAT WHEN  (while-loop: repeats while condition is true)
+// ─────────────────────────────────────────────────────────────
+void Interpreter::execRepeatWhen(const Statement& s) {
+    int safety = 1000000;
+    while (safety-- > 0) {
+        string cond = evaluate(s.condition, s.line);
+        if (cond != "TRUE") break;
+        execute(s.body);
+    }
+}
+
+// ═════════════════════════════════════════════════════════════
+//  EXPRESSION EVALUATOR
+//  Handles:
+//    - arithmetic:  +, -, *, /, %,  unary -
+//    - comparison:  <, >, <=, >=, ==, <>
+//    - logical:     AND, OR, NOT
+//    - parentheses, variable substitution, literals
+// ═════════════════════════════════════════════════════════════
+string Interpreter::evaluate(const string& rawExpr, int line) {
+    string expr = trim(rawExpr);
+
+    if (expr.empty())
+        error("LEXOR-030", "Empty expression", line);
+
+    // ── CHAR literal  'x' ─────────────────────────────────
+    if (expr.size() >= 3 && expr.front() == '\'' && expr.back() == '\'')
+        return string(1, expr[1]);
+
+    // ── STRING literal "…" ────────────────────────────────
+    if (expr.size() >= 2 && expr.front() == '"' && expr.back() == '"')
+        return expr.substr(1, expr.size() - 2);
+
+    // ── BOOL literal ─────────────────────────────────────
+    if (expr == "TRUE" || expr == "FALSE") return expr;
+
+    // ── Single variable? ─────────────────────────────────
+    if (symbolTable.count(expr)) return symbolTable[expr];
+
+    // ── Contains logical keywords? → logical evaluator ───
+    if (expr.find(" AND ") != string::npos ||
+        expr.find(" OR ")  != string::npos ||
+        expr.find("NOT ")  != string::npos) {
+        return evalLogical(expr, line);
+    }
+
+    // ── Contains comparison operator? → boolean result ───
+    // We check for <>, >=, <=, ==, <, > (avoid confusing with arrows)
+    auto hasComparison = [&]() {
+        // Simple scan: not inside parens
+        int depth = 0;
+        for (size_t i = 0; i < expr.size(); i++) {
+            char c = expr[i];
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (depth == 0) {
+                if (i+1 < expr.size()) {
+                    string two = string(1,c) + expr[i+1];
+                    if (two=="<>" || two==">=" || two=="<=" || two=="==")
+                        return true;
+                }
+                if ((c == '<' || c == '>') && depth == 0) return true;
+            }
+        }
+        return false;
+    };
+
+    if (hasComparison()) {
+        // Split on the comparison operator (outermost only)
+        // and evaluate both sides as arithmetic then compare
+        auto splitComp = [&](const string& op) -> pair<string,string> {
+            size_t p = expr.find(op);
+            if (p == string::npos) return {"",""};
+            return { trim(expr.substr(0, p)),
+                     trim(expr.substr(p + op.size())) };
+        };
+
+        string lhs, rhs, op;
+        // Try two-char first
+        for (auto& twoOp : vector<string>{"<>",">=","<=","=="}) {
+            size_t p = expr.find(twoOp);
+            if (p != string::npos) {
+                lhs = trim(expr.substr(0, p));
+                rhs = trim(expr.substr(p + 2));
+                op  = twoOp;
+                break;
+            }
+        }
+        if (op.empty()) {
+            // single-char < or >
+            for (char sOp : {'<','>'}) {
+                size_t p = expr.find(sOp);
+                if (p != string::npos) {
+                    lhs = trim(expr.substr(0, p));
+                    rhs = trim(expr.substr(p + 1));
+                    op  = string(1, sOp);
+                    break;
+                }
+            }
+        }
+
+        if (!op.empty()) {
+            double l = evalArith(substituteVars(lhs), line);
+            double r = evalArith(substituteVars(rhs), line);
+            bool result;
+            if      (op == "<")  result = l <  r;
+            else if (op == ">")  result = l >  r;
+            else if (op == "<=") result = l <= r;
+            else if (op == ">=") result = l >= r;
+            else if (op == "==") result = l == r;
+            else                 result = l != r;   // <>
+            return result ? "TRUE" : "FALSE";
+        }
+    }
+
+    // ── Arithmetic expression ─────────────────────────────
+    string substituted = substituteVars(expr);
+    double d = evalArith(substituted, line);
+
+    // Return as INT if no fractional part
+    if (d == (long long)d) return to_string((long long)d);
+
+    // Return as FLOAT
+    ostringstream oss;
+    oss << d;
+    return oss.str();
+}
+
+// ─────────────────────────────────────────────────────────────
+//  substituteVars
+//  Replaces every identifier token in `expr` with its value.
+// ─────────────────────────────────────────────────────────────
+string Interpreter::substituteVars(const string& expr) const {
+    string result;
+    string buf;
+
+    auto flushBuf = [&]() {
+        if (!buf.empty()) {
+            if (symbolTable.count(buf)) result += symbolTable.at(buf);
+            else                         result += buf;
+            buf.clear();
+        }
+    };
+
+    for (size_t i = 0; i < expr.size(); i++) {
+        char c = expr[i];
+        if (isalpha(c) || c == '_') {
+            buf += c;
+        } else if (!buf.empty() && (isalnum(c) || c == '_')) {
+            buf += c;
+        } else {
+            flushBuf();
+            result += c;
+        }
+    }
+    flushBuf();
+    return result;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  evalLogical
+//  Handles AND, OR, NOT by splitting on those keywords.
+//  Recursive: sub-expressions are passed back to evaluate().
+// ─────────────────────────────────────────────────────────────
+string Interpreter::evalLogical(const string& expr, int line) {
+    // Strip outer parens
+    string e = trim(expr);
+    while (e.size() >= 2 && e.front() == '(' && e.back() == ')') {
+        // Verify they match
+        int depth = 0;
+        bool matched = true;
+        for (size_t i = 0; i < e.size()-1; i++) {
+            if (e[i]=='(') depth++;
+            else if (e[i]==')') { depth--; if (depth==0){matched=false;break;} }
+        }
+        if (matched) e = trim(e.substr(1, e.size()-2));
+        else break;
+    }
+
+    // --- NOT ---
+    if (e.substr(0, 4) == "NOT ") {
+        string sub = trim(e.substr(4));
+        string val = evaluate(sub, line);
+        if (val != "TRUE" && val != "FALSE")
+            error("LEXOR-031", "NOT requires a BOOL expression", line);
+        return (val == "TRUE") ? "FALSE" : "TRUE";
+    }
+
+    // --- Split on OR (lowest precedence) ---
+    // Scan for ' OR ' outside parentheses
+    int depth = 0;
+    for (size_t i = 0; i < e.size(); i++) {
+        if (e[i]=='(') depth++;
+        else if (e[i]==')') depth--;
+        else if (depth==0 && e.substr(i,4)==" OR ") {
+            string lhs = evaluate(trim(e.substr(0,i)), line);
+            string rhs = evaluate(trim(e.substr(i+4)), line);
+            return (lhs=="TRUE" || rhs=="TRUE") ? "TRUE" : "FALSE";
+        }
+    }
+
+    // --- Split on AND ---
+    depth = 0;
+    for (size_t i = 0; i < e.size(); i++) {
+        if (e[i]=='(') depth++;
+        else if (e[i]==')') depth--;
+        else if (depth==0 && e.substr(i,5)==" AND ") {
+            string lhs = evaluate(trim(e.substr(0,i)), line);
+            string rhs = evaluate(trim(e.substr(i+5)), line);
+            return (lhs=="TRUE" && rhs=="TRUE") ? "TRUE" : "FALSE";
+        }
+    }
+
+    // Fall through to regular evaluate (comparison or bool literal)
+    return evaluate(e, line);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  evalArith  —  shunting-yard algorithm
+// ─────────────────────────────────────────────────────────────
+int Interpreter::precedence(char op) {
+    if (op=='+' || op=='-') return 1;
+    if (op=='*' || op=='/' || op=='%') return 2;
+    return 0;
+}
+
+double Interpreter::applyOp(double a, double b, char op, int line) {
     switch (op) {
         case '+': return a + b;
         case '-': return a - b;
         case '*': return a * b;
-        case '/': return a / b;
+        case '/':
+            if (b == 0) error("LEXOR-040", "Division by zero", line);
+            return a / b;
+        case '%':
+            if (b == 0) error("LEXOR-041", "Modulo by zero", line);
+            return fmod(a, b);
     }
+    error("LEXOR-042", string("Unknown operator: ") + op, line);
     return 0;
 }
 
-// precedence
-int precedence(char op) {
-    if (op == '+' || op == '-') return 1;
-    if (op == '*' || op == '/') return 2;
-    return 0;
-}
+double Interpreter::evalArith(const string& rawExpr, int line) {
+    string expr = trim(rawExpr);
 
+    stack<double> vals;
+    stack<char>   ops;
 
-
-double evaluateExpression(string expr) {
-    stack<double> values;
-    stack<char> ops;
-
-    auto applyTop = [&]() {
-        if (values.size() < 2)
-            error("EVAL-003", "Invalid expression (not enough operands)");
-
-        double b = values.top(); values.pop();
-
-        if (values.empty())
-            error("EVAL-004", "Missing operand in expression");
-
-        double a = values.top(); values.pop();
-
-        char op = ops.top(); ops.pop();
-
-        values.push(applyOp(a, b, op));
+    auto doOp = [&]() {
+        if (vals.size() < 2)
+            error("LEXOR-043", "Malformed expression: " + expr, line);
+        double b = vals.top(); vals.pop();
+        double a = vals.top(); vals.pop();
+        char   o = ops.top();  ops.pop();
+        vals.push(applyOp(a, b, o, line));
     };
 
-    for (int i = 0; i < expr.length(); i++) {
+    size_t i = 0;
+    bool expectUnary = true;   // true at start or after '('
+
+    while (i < expr.size()) {
         char c = expr[i];
 
-        if (isspace(c)) continue;
+        // Skip whitespace
+        if (isspace(c)) { i++; continue; }
 
-        // =====================
-        // NUMBER PARSING
-        // =====================
-        if (isdigit(c)) {
-            string num = "";
-
-            while (i < expr.length() &&
-                   (isdigit(expr[i]) || expr[i] == '.')) {
-                num += expr[i];
-                i++;
-            }
-
-            i--;
-            values.push(stod(num));
-        }
-
-        // =====================
-        // OPEN PARENTHESIS
-        // =====================
-        else if (c == '(') {
-            ops.push(c);
-        }
-
-        // =====================
-        // CLOSE PARENTHESIS
-        // =====================
-        else if (c == ')') {
-            while (!ops.empty() && ops.top() != '(') {
-                applyTop();
-            }
-
-            if (!ops.empty()) ops.pop(); // remove '('
-        }
-
-        // =====================
-        // OPERATORS
-        // =====================
-        else if (c == '+' || c == '-' || c == '*' || c == '/') {
-
-            // unary minus
-            if (c == '-' &&
-                (i == 0 ||
-                 expr[i - 1] == '(' ||
-                 expr[i - 1] == '+' ||
-                 expr[i - 1] == '-' ||
-                 expr[i - 1] == '*' ||
-                 expr[i - 1] == '/') &&
-                (i + 1 < expr.length() &&
-                 (isdigit(expr[i + 1]) || expr[i + 1] == '('))) {
-
-                values.push(0);
-            }
-
-            // precedence handling
-            while (!ops.empty() &&
-                   ops.top() != '(' &&
-                   precedence(ops.top()) >= precedence(c)) {
-                applyTop();
-            }
-
-            ops.push(c);
-        }
-    }
-
-    // =====================
-    // FINAL CLEANUP PHASE
-    // =====================
-    while (!ops.empty()) {
-
-        if (ops.top() == '(') {
-            ops.pop();
+        // Number (possibly with leading sign handled as unary)
+        if (isdigit(c) || (c=='.' && i+1<expr.size() && isdigit(expr[i+1]))) {
+            string numStr;
+            while (i<expr.size() && (isdigit(expr[i]) || expr[i]=='.'))
+                numStr += expr[i++];
+            vals.push(stod(numStr));
+            expectUnary = false;
             continue;
         }
 
-        applyTop();
+        // Unary +/-
+        if ((c=='+' || c=='-') && expectUnary) {
+            string numStr(1, c);
+            i++;
+            while (i<expr.size() && (isdigit(expr[i]) || expr[i]=='.'))
+                numStr += expr[i++];
+            if (numStr.size()==1)
+                error("LEXOR-044", "Dangling unary sign in: " + expr, line);
+            vals.push(stod(numStr));
+            expectUnary = false;
+            continue;
+        }
+
+        // Left paren
+        if (c == '(') {
+            ops.push('(');
+            i++;
+            expectUnary = true;
+            continue;
+        }
+
+        // Right paren
+        if (c == ')') {
+            while (!ops.empty() && ops.top() != '(') doOp();
+            if (ops.empty())
+                error("LEXOR-045", "Mismatched parentheses in: " + expr, line);
+            ops.pop();  // pop '('
+            i++;
+            expectUnary = false;
+            continue;
+        }
+
+        // Binary operator
+        if (c=='+' || c=='-' || c=='*' || c=='/' || c=='%') {
+            while (!ops.empty() && ops.top()!='(' &&
+                   precedence(ops.top()) >= precedence(c))
+                doOp();
+            ops.push(c);
+            i++;
+            expectUnary = true;
+            continue;
+        }
+
+        error("LEXOR-046", string("Unexpected character '") + c
+              + "' in arithmetic expression: " + expr, line);
     }
 
-    // =====================
-    // RESULT CHECK
-    // =====================
-    if (values.empty())
-        error("EVAL-005", "Expression evaluation failed");
+    while (!ops.empty()) {
+        if (ops.top() == '(')
+            error("LEXOR-045", "Mismatched parentheses in: " + expr, line);
+        doOp();
+    }
 
-    return values.top();
+    if (vals.empty())
+        error("LEXOR-047", "Empty arithmetic expression: " + expr, line);
+
+    return vals.top();
 }
 
-//VALIDATION for data types
-bool isInteger(const string& s) {
-    if (s.empty()) return false;
+// ═════════════════════════════════════════════════════════════
+//  Type checking
+// ═════════════════════════════════════════════════════════════
+void Interpreter::checkType(const string& var,
+                             const string& value, int line) {
+    const string& type = typeTable.at(var);
 
-    int i = 0;
-    if (s[0] == '-') i = 1;
-
-    for (; i < s.size(); i++) {
-        if (!isdigit(s[i])) return false;
+    if (type == "INT") {
+        if (!isInteger(value))
+            error("LEXOR-011",
+                  "Type error: INT variable '" + var +
+                  "' cannot hold '" + value + "'", line);
     }
+    else if (type == "FLOAT") {
+        if (!isInteger(value) && !isFloat(value))
+            error("LEXOR-012",
+                  "Type error: FLOAT variable '" + var +
+                  "' cannot hold '" + value + "'", line);
+    }
+    else if (type == "BOOL") {
+        if (value != "TRUE" && value != "FALSE")
+            error("LEXOR-013",
+                  "Type error: BOOL variable '" + var +
+                  "' cannot hold '" + value + "'", line);
+    }
+    else if (type == "CHAR") {
+        if (value.size() != 1)
+            error("LEXOR-014",
+                  "Type error: CHAR variable '" + var +
+                  "' cannot hold '" + value + "'", line);
+    }
+}
+
+string Interpreter::defaultValue(const string& type) {
+    if (type == "INT")   return "0";
+    if (type == "FLOAT") return "0.0";
+    if (type == "BOOL")  return "FALSE";
+    if (type == "CHAR")  return " ";
+    return "";
+}
+
+// ═════════════════════════════════════════════════════════════
+//  Utility
+// ═════════════════════════════════════════════════════════════
+string Interpreter::trim(const string& s) {
+    size_t b = s.find_first_not_of(" \t\r\n");
+    if (b == string::npos) return "";
+    size_t e = s.find_last_not_of (" \t\r\n");
+    return s.substr(b, e - b + 1);
+}
+bool Interpreter::isInteger(const string& s) {
+    if (s.empty()) return false;
+    int i = (s[0]=='-'||s[0]=='+') ? 1 : 0;
+    if (i==(int)s.size()) return false;
+    for (; i<(int)s.size(); i++) if (!isdigit(s[i])) return false;
     return true;
 }
-
-bool isFloat(const string& s) {
-    bool dotFound = false;
-    int i = 0;
-
+bool Interpreter::isFloat(const string& s) {
     if (s.empty()) return false;
-    if (s[0] == '-') i = 1;
-
-    for (; i < s.size(); i++) {
-        if (s[i] == '.') {
-            if (dotFound) return false;
-            dotFound = true;
-        }
+    int i = (s[0]=='-'||s[0]=='+') ? 1 : 0;
+    bool dot = false;
+    for (; i<(int)s.size(); i++) {
+        if (s[i]=='.') { if(dot) return false; dot=true; }
         else if (!isdigit(s[i])) return false;
     }
-
-    return dotFound;
+    return dot;
 }
-
-bool isBool(const string& s) {
-    return s == "TRUE" || s == "FALSE";
-}
-
-bool isChar(const string& s) {
-    return s.size() == 1;
-}
-bool isStrictChar(const string& s) {
-    return s.size() == 3 &&
-           s.front() == '\'' &&
-           s.back() == '\'';
-}
-
-bool isStrictBool(const string& s) {
-    return (s == "\"TRUE\"" || s == "\"FALSE\"");
-}
-bool startsWith(const string& str, const string& prefix) {
-    return str.rfind(prefix, 0) == 0;
-}
-
-bool isReservedWord(string word) {
-    return reservedWords.find(word) != reservedWords.end();
-}
-
-bool isAllUpper(const string& s) {
-    for (char c : s) {
-        if (isalpha(c) && !isupper(c))
-            return false;
-    }
-    return true;
-}
-
-bool isQuoted(const string& token) {
-    return (token.size() >= 2 &&
-           ((token.front() == '"' && token.back() == '"') ||
-            (token.front() == '\'' && token.back() == '\'')));
-}
-
-bool endsWith(const string& str, const string& suffix) {
-    return str.size() >= suffix.size() &&
-           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
-bool isExpression(string value) {
-    return value.find('+') != string::npos ||
-           value.find('-') != string::npos ||
-           value.find('*') != string::npos ||
-           value.find('/') != string::npos ||
-           value.find('(') != string::npos;
-}
-
-bool isValidIdentifier(const string& name) {
-    if (name.empty()) return false;
-    if (!(isalpha(name[0]) || name[0] == '_'))
-        return false;
-    for (char c : name) {
-        if (!(isalnum(c) || c == '_'))
-            return false;
-    }
-    return true;
-}
-
-string normalizeQuotes(string value) {
-    value = trim(value);
-    if (value.empty()) return value;
-
-    if ((value.front() == '"' && value.back() == '"') ||
-        (value.front() == '\'' && value.back() == '\'')) {
-        return value.substr(1, value.size() - 2);
-    }
-    string openD = "”"; string closeD = "”";
-    string openS = "’"; string closeS = "’";
-
-    if (value.size() >= 6) { 
-        if (startsWith(value, openD) && endsWith(value, closeD)) {
-            return value.substr(3, value.size() - 6);
-        }
-        if (startsWith(value, openS) && endsWith(value, closeS)) {
-            return value.substr(3, value.size() - 6);
-        }
-    }
-
-    return value;
-}
-
-string getStatementType(const string& line) {
-    if (line.find("DECLARE") == 0) return "DECLARE";
-    if (line.find("PRINT:") == 0) return "PRINT";
-    if (line.find("=") != string::npos) return "ASSIGN";
-    return "UNKNOWN";
-}
-
-
-// main functnions
-Interpreter::Interpreter(vector<string> programLines) {
-
-    lines = programLines;
-
-}
-
-
-
-void Interpreter::run() {
-    removeComments();
-    validateStructure();
-    validateOneStatementPerLine();
-    validateDeclarationOrder();
-    validateStatements();
-    
-    cout << "LEXOR program structure is valid." << endl; // validates if naaay START SCRIPT, SCRIPT AREA, ug END SCRIPT
-
-    processDeclarations();
-    processAssignments();
-    processPrint();
-}
-
-void Interpreter::validateStatements() {
-    for (int i = 0; i < lines.size(); i++) {
-        string line = trim(lines[i]);
-
-        if (line == "SCRIPT AREA" ||
-            line == "START SCRIPT" ||
-            line == "END SCRIPT") {
-            continue;
-        }
-
-        if (line.empty()) continue;
-
-        bool isDeclare = line.find("DECLARE") == 0;
-        bool isPrint   = line.find("PRINT:") == 0;
-        bool isAssign  = (!isDeclare && line.find("=") != string::npos);
-
-        if (!isDeclare && !isPrint && !isAssign) {
-            error("LEXOR-005",
-                  "Invalid or unknown statement: " + line,
-                  i + 1);
-        }
-    }
-}
-
-
-// now removes comments everywhere
-void Interpreter::removeComments() {
-    vector<string> cleaned;
-
-    for (string line : lines) {
-        size_t pos = line.find("%%");
-
-        if (pos != string::npos) {
-            line = line.substr(0, pos); 
-        }
-
-        line = trim(line);
-
-        if (!line.empty()) {
-            cleaned.push_back(line);
-        }
-    }
-
-    lines = cleaned;
-}
-
-
-void Interpreter::validateStructure() {
-
-    bool foundStart = false;
-    bool foundEnd = false;
-
-    if (lines.size() < 3) {
-        error("LEXOR-000", "Program is too short. Missing required structure.");
-    }
-
-    if (lines[0] != "SCRIPT AREA") {
-        error("LEXOR-001",
-              "Expected 'SCRIPT AREA' at the beginning of program, found: " + lines[0], 1);
-    }
-
-    if (lines[1] != "START SCRIPT") {
-        error("LEXOR-002",
-              "Expected 'START SCRIPT' after SCRIPT AREA, found: " + lines[1], 2);
-    }
-
-    if (lines.back() != "END SCRIPT") {
-        error("LEXOR-003",
-              "Expected 'END SCRIPT' at end of program, found: " + lines.back(),
-              lines.size());
-    }
-
-    for(int i=1; i<lines.size(); i++){
-        if(lines[i] == "START SCRIPT"){
-            if(foundStart) error("LEXOR-004", "Multiple 'START SCRIPT' found.", i+1);
-            foundStart = true;
-        }
-        else if(lines[i] == "END SCRIPT"){
-            if(foundEnd) error("LEXOR-005", "Multiple 'END SCRIPT' found.", i+1);
-            foundEnd = true;
-        }
-
-        if(foundStart && i > 1 && lines[i] == "SCRIPT AREA"){
-            error("LEXOR-006", "'SCRIPT AREA' should only appear at the beginning.", i+1);
-        }
-    }
-}
-
-void Interpreter::processDeclarations() {
-    int i = 2;
-
-    while (i < lines.size()) {
-        string line = trim(lines[i]);
-
-        if (line.find("DECLARE") != 0) {
-            break;
-        }
-
-        string rest = line.substr(8);
-
-        int spacePos = rest.find(" ");
-        string type = trim(rest.substr(0, spacePos));
-        string vars = trim(rest.substr(spacePos + 1));
-        if (type != "INT" && type != "FLOAT" && type != "BOOL" && type != "CHAR") {
-            error("LEXOR-015", "Invalid data type used in DECLARE: " + type);
-        }
-        string var = "";
-
-        for (int j = 0; j <= vars.length(); j++) {
-            if (j == vars.length() || vars[j] == ',') {
-
-                string token = trim(var);
-                int equalPos = token.find('=');
-
-                string name;
-                string value = "";
-
-                if (equalPos != string::npos) {
-                    name = trim(token.substr(0, equalPos));
-                    value = trim(token.substr(equalPos + 1));
-
-                    if (type == "CHAR") {
-                        if (!(value.size() >= 3 && value.front() == '\'' && value.back() == '\''))
-                            error("LEXOR-014", "CHAR must be enclosed in single quotes: " + value);
-
-                        value = value.substr(1, 1);
-                    }
-
-                    else if (type == "BOOL") {
-                        if (!(value == "\"TRUE\"" || value == "\"FALSE\""))
-                            error("LEXOR-013", "BOOL must be enclosed in double quotes: " + value);
-
-                        value = (value == "\"TRUE\"") ? "TRUE" : "FALSE";
-                    }
-                }
-                else {
-                    name = token;
-
-                    if (type == "INT")
-                        value = "0";
-                    else if (type == "FLOAT")
-                        value = "0";
-                    else if (type == "BOOL")
-                        value = "FALSE";
-                    else if (type == "CHAR")
-                        value = "";
-                }
-
-                if (isReservedWord(name)) {
-                    error("LEXOR-010", "Reserved word cannot be used as variable name: " + name);
-                }
-
-                if (!isValidIdentifier(name)) {
-                    error("LEXOR-007", "Invalid variable name: " + name);
-                }
-
-                if (type == "INT") {
-                    if (!isInteger(value))
-                        error("LEXOR-011", "Invalid INT value: " + value);
-                }
-                else if (type == "FLOAT") {
-                    if (!isInteger(value) && !isFloat(value))
-                        error("LEXOR-012", "Invalid FLOAT value: " + value);
-                }
-                else if (type == "BOOL") {
-                    if (!isBool(value))
-                        error("LEXOR-013", "Invalid BOOL value: " + value);
-                }
-                else if (type == "CHAR") {
-                    if (!isChar(value))
-                        error("LEXOR-014", "Invalid CHAR value: " + value);
-                }
-
-                symbolTable[name] = value;
-                typeTable[name] = type;
-
-                var = "";
-            }
-            else {
-                var += vars[j];
-            }
-        }
-
-        i++;
-    }
-}
-
-void Interpreter::processAssignments(){
-    for (int i = 2; i < lines.size(); i++){
-        string line = trim(lines[i]);
-
-        if(line.find("DECLARE") == 0) continue;
-        if(line.find("PRINT") == 0) continue;
-        if(line.find("IF") == 0) continue;
-
-        if(line.find("=") != string::npos){
-            vector<string>parts;
-            string temp ="";
-
-            for (char c : line){
-                if(c == '='){
-                    parts.push_back(trim(temp));
-                    temp = "";
-                }else temp += c;
-            }
-
-            parts.push_back(trim(temp));
-
-            string value = trim(parts.back());
-
-            if(isExpression(value)){
-                value = replaceVariables(value);
-                double result = evaluateExpression(value);
-                value = to_string((long long)result);
-            }
-
-            value = normalizeQuotes(value);
-
-            for (int j = parts.size() - 2; j >= 0; j--) {
-                string var = trim(parts[j]);
-
-                string type = typeTable[var];
-
-                if (type == "INT") {
-                    if (!isInteger(value))
-                        error("LEXOR-011", "Invalid INT assignment: " + value);
-                }
-                else if (type == "FLOAT") {
-                    if (!isInteger(value) && !isFloat(value))
-                        error("LEXOR-012", "Invalid FLOAT assignment: " + value);
-                }
-                else if (type == "BOOL") {
-                    if (!isBool(value))
-                        error("LEXOR-013", "Invalid BOOL assignment: " + value);
-                }
-                else if (type == "CHAR") {
-                    if (!isChar(value))
-                        error("LEXOR-014", "Invalid CHAR assignment: " + value);
-                }
-
-                if (symbolTable.find(value) != symbolTable.end()) {
-                    value = symbolTable[value];
-                }
-
-                symbolTable[var] = value;
-            }
-        }
-    }
-}
-
-void Interpreter::processPrint() {
-    setlocale(LC_ALL, "en_US.UTF-8");
-
-    for (string line : lines) {
-        if (line.find("PRINT:") != 0)
-            continue;
-
-        string content = trim(line.substr(6));
-
-        string output = "";
-        string buffer = "";
-        bool inQuotes = false;
-
-        for (size_t i = 0; i < content.size(); i++) {
-            char c = content[i];
-
-            // =====================
-            // QUOTES
-            // =====================
-            if (c == '"') {
-                if (inQuotes) {
-                    output += buffer;
-                    buffer = "";
-                }
-                inQuotes = !inQuotes;
-                continue;
-            }
-
-            if (inQuotes) {
-                buffer += c;
-                continue;
-            }
-
-            // =====================
-            // NEWLINE TOKEN ($)
-            // =====================
-            if (c == '$') {
-                if (!buffer.empty()) {
-                    string token = trim(buffer);
-
-                    if (symbolTable.find(token) != symbolTable.end())
-                        output += symbolTable[token];
-                    else
-                        output += normalizeQuotes(token);
-
-                    buffer = "";
-                }
-
-                output += "\n"; 
-
-                continue;
-            }
-
-            // EMPTY BRACKETS []
-            if (c == '[' && i + 1 < content.size() && content[i + 1] == ']') {
-                i++;
-                continue;
-            }
-
-            if (c == '[' || c == ']') {
-                continue;
-            }
-
-            // CONCAT OPERATOR
-            if (c == '&') {
-                if (!buffer.empty()) {
-                    string token = trim(buffer);
-
-                    if (symbolTable.find(token) != symbolTable.end())
-                        output += symbolTable[token];
-                    else
-                        output += normalizeQuotes(token);
-
-                    buffer = "";
-                }
-                continue;
-            }
-
-            buffer += c;
-        }
-
-        // flush last buffer
-        if (!buffer.empty()) {
-            string token = trim(buffer);
-
-            if (symbolTable.find(token) != symbolTable.end())
-                output += symbolTable[token];
-            else
-                output += normalizeQuotes(token);
-        }
-
-        cout << output << endl;
-    }
-}
-
-string Interpreter::replaceVariables(string expr) {
-    string result = "";
-    string current = "";
-
-    for (int i = 0; i < expr.length(); i++) {
-        char c = expr[i];
-        if (isalnum(c) || c == '_') {
-            current += c;
-        }
-        else {
-            if (!current.empty()) {
-                if (symbolTable.find(current) != symbolTable.end()) {
-                    result += symbolTable[current]; // replace with value
-                } else {
-                    result += current; // just in case
-                }
-                current = "";
-            }
-            result += c; // keep operator
-        }
-    }
-    if (!current.empty()) {
-        if (symbolTable.find(current) != symbolTable.end())result += symbolTable[current];
-        else result += current;
-    }
-
-    return result;
-}
-
-void Interpreter::validateOneStatementPerLine() {
-    for (int i = 0; i < lines.size(); i++) {
-        string line = trim(lines[i]);
-
-        int declareCount = 0;
-        int printCount = 0;
-
-        // count DECLARE occurrences
-        size_t pos = line.find("DECLARE");
-        while (pos != string::npos) {
-            declareCount++;
-            pos = line.find("DECLARE", pos + 1);
-        }
-
-        if (line.find("PRINT:") == 0) printCount = 1;
-
-        // assignment detection (only if NOT DECLARE line)
-        bool hasAssign = (line.find("=") != string::npos && line.find("DECLARE") != 0);
-
-        int statementCount = declareCount + printCount + (hasAssign ? 1 : 0);
-
-        if (statementCount > 1) {
-            error("LEXOR-008",
-                  "Multiple statements in one line are not allowed: " + line,
-                  i + 1);
-        }
-    }
-}
-
-void Interpreter::validateDeclarationOrder() {
-    bool executionStarted = false;
-
-    for (int i = 0; i < lines.size(); i++) {
-        string line = trim(lines[i]);
-
-        // detect real execution statements ONLY
-        bool isPrint = line.find("PRINT:") == 0;
-        bool isAssign = (!line.empty() &&
-                         line.find("DECLARE") != 0 &&
-                         line.find("=") != string::npos);
-
-        if (isPrint || isAssign) {
-            executionStarted = true;
-        }
-
-        // DECLARE after execution is forbidden
-        if (executionStarted && line.find("DECLARE") == 0) {
-            error("LEXOR-009",
-                  "Variable declarations must appear before executable statements: " + line,
-                  i + 1);
-        }
-    }
-}
+bool Interpreter::isBool(const string& s){return s=="TRUE"||s=="FALSE";}
+bool Interpreter::isChar(const string& s){return s.size()==1;}
