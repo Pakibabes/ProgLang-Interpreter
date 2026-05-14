@@ -8,13 +8,61 @@ Lexer::Lexer(const vector<string>& sourceLines) : lines(sourceLines) {}
 
 const vector<Token>& Lexer::getTokens() const { return tokens; }
 
-
+// ─────────────────────────────────────────────────────────────
+//  Main tokeniser
+//
+//  Strategy: walk each line character-by-character.
+//  We handle:
+//    - %% comments         (skip rest of line)
+//    - "string literals"   (keep inner text as TOKEN_STRING_LITERAL)
+//    - 'char literals'     (keep as TOKEN_CHAR_LITERAL)
+//    - two-char operators  (<>, >=, <=, ==)
+//    - single-char symbols (+, -, *, /, %, (, ), ,, :, &, $, [, ])
+//    - identifier / keyword / number words (accumulated in buffer)
+//
+//  After collecting all raw single-line tokens we do a second pass
+//  to collapse multi-word tokens:
+//    SCRIPT AREA  →  TOKEN_SCRIPT_AREA
+//    START SCRIPT →  TOKEN_START_SCRIPT
+//    END SCRIPT   →  TOKEN_END_SCRIPT
+//    START IF     →  TOKEN_START_IF
+//    END IF       →  TOKEN_END_IF
+//    START FOR    →  TOKEN_START_FOR
+//    END FOR      →  TOKEN_END_FOR
+//    START REPEAT →  TOKEN_START_REPEAT
+//    END REPEAT   →  TOKEN_END_REPEAT
+//    ELSE IF      →  TOKEN_ELSE_IF
+//    REPEAT WHEN  →  TOKEN_REPEAT_WHEN
+// ─────────────────────────────────────────────────────────────
 void Lexer::tokenize() {
 
     for (int lineIdx = 0; lineIdx < (int)lines.size(); lineIdx++) {
 
         string raw  = lines[lineIdx];
-        int    lineNo = lineIdx + 1;  
+        int    lineNo = lineIdx + 1; 
+
+
+        {
+            string normalized;
+            for (size_t k = 0; k < raw.size(); ) {
+                unsigned char c0 = (unsigned char)raw[k];
+                if (c0 == 0xE2 && k + 2 < raw.size()
+                    && (unsigned char)raw[k+1] == 0x80)
+                {
+                    unsigned char c2 = (unsigned char)raw[k+2];
+                    if (c2 == 0x9C || c2 == 0x9D) {
+                        normalized += '"';
+                        k += 3; continue;
+                    }
+                    if (c2 == 0x98 || c2 == 0x99) {
+                        normalized += '\'';
+                        k += 3; continue;
+                    }
+                }
+                normalized += raw[k++];
+            }
+            raw = normalized;
+        }
 
         size_t commentPos = raw.find("%%");
         if (commentPos != string::npos)
@@ -47,21 +95,21 @@ void Lexer::tokenize() {
                 else if (w == "AREA")    emitLine(TOKEN_UNKNOWN,     w);
                 else if (w == "START")   emitLine(TOKEN_UNKNOWN,     w);
                 else if (w == "END")     emitLine(TOKEN_UNKNOWN,     w);
- 
+                // Logical
                 else if (w == "AND")     emitLine(TOKEN_AND,         w);
                 else if (w == "OR")      emitLine(TOKEN_OR,          w);
                 else if (w == "NOT")     emitLine(TOKEN_NOT,         w);
-
+                // Data types
                 else if (w == "INT")     emitLine(TOKEN_INT_TYPE,    w);
                 else if (w == "FLOAT")   emitLine(TOKEN_FLOAT_TYPE,  w);
                 else if (w == "BOOL")    emitLine(TOKEN_BOOL_TYPE,   w);
                 else if (w == "CHAR")    emitLine(TOKEN_CHAR_TYPE,   w);
-
+                // Bool literals (unquoted TRUE/FALSE used in expressions)
                 else if (isBool(w))      emitLine(TOKEN_BOOL_LITERAL, w);
-  
+                // Number literals
                 else if (isInteger(w))   emitLine(TOKEN_INT_LITERAL,  w);
                 else if (isFloat(w))     emitLine(TOKEN_FLOAT_LITERAL, w);
-
+                // Identifier
                 else                     emitLine(TOKEN_IDENTIFIER,   w);
             }
         };
@@ -80,7 +128,6 @@ void Lexer::tokenize() {
                 i++;
                 while (i < (int)raw.size() && raw[i] != '"')
                     lit += raw[i++];
-                // i now points at closing "
                 emitLine(TOKEN_STRING_LITERAL, lit);
                 continue;
             }
@@ -155,7 +202,7 @@ void Lexer::tokenize() {
 
         tokens.push_back({TOKEN_NEWLINE, "\n", lineNo});
 
-    }
+    } 
 
     tokens.push_back({TOKEN_EOF, "", (int)lines.size()});
 }
