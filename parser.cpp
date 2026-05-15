@@ -39,39 +39,32 @@ bool Parser::atEnd() const {
 
 vector<Statement> Parser::parse() {
 
-    // 1. Require SCRIPT AREA
     if (!check(TOKEN_SCRIPT_AREA))
         error("PARSE-100", "Program must begin with 'SCRIPT AREA'", peek().line);
     advance();
     while (match(TOKEN_NEWLINE)) {}
 
-    // 2. Require START SCRIPT
     if (!check(TOKEN_START_SCRIPT))
         error("PARSE-101", "Expected 'START SCRIPT' after 'SCRIPT AREA'", peek().line);
     advance();
     while (match(TOKEN_NEWLINE)) {}
 
-    // 3. Collect declarations first (they must all come before exec stmts)
     vector<Statement> stmts;
 
-    // Skip blank lines
     while (match(TOKEN_NEWLINE)) {}
 
-    // Parse DECLARE statements
     while (!atEnd() && check(TOKEN_DECLARE)) {
         stmts.push_back(parseDeclare());
-        while (match(TOKEN_NEWLINE)) {}  // consume end-of-declare-line
+        while (match(TOKEN_NEWLINE)) {}
     }
 
-    // 4. Parse executable statements until END SCRIPT
     while (!atEnd() && !check(TOKEN_END_SCRIPT)) {
-        while (match(TOKEN_NEWLINE)) {}  // skip blank lines
+        while (match(TOKEN_NEWLINE)) {}
         if (check(TOKEN_END_SCRIPT) || atEnd()) break;
         stmts.push_back(parseStatement());
-        while (match(TOKEN_NEWLINE)) {}  // consume end-of-statement line
+        while (match(TOKEN_NEWLINE)) {} 
     }
 
-    // 5. Require END SCRIPT
     if (!check(TOKEN_END_SCRIPT))
         error("PARSE-102", "Expected 'END SCRIPT' at end of program", peek().line);
     advance();
@@ -90,7 +83,6 @@ Statement Parser::parseStatement() {
     if (t == TOKEN_FOR)          return parseFor();
     if (t == TOKEN_REPEAT_WHEN)  return parseRepeatWhen();
 
-    // Default: treat as assignment  a = b = expr
     return parseAssignOrExpr();
 }
 
@@ -101,13 +93,12 @@ Statement Parser::parseDeclare() {
 
     expect(TOKEN_DECLARE, "Expected 'DECLARE'");
 
-    // Data type
     TokenType dt = peek().type;
     if (dt != TOKEN_INT_TYPE && dt != TOKEN_FLOAT_TYPE &&
         dt != TOKEN_BOOL_TYPE && dt != TOKEN_CHAR_TYPE)
         error("PARSE-010", "Expected a data type after DECLARE", peek().line);
 
-    s.dataType = advance().value;   // "INT" / "FLOAT" / "BOOL" / "CHAR"
+    s.dataType = advance().value; 
 
     s.declarations = parseVarDeclList();
     return s;
@@ -129,10 +120,9 @@ vector<VarDecl> Parser::parseVarDeclList() {
         if (match(TOKEN_ASSIGN)) {
             vd.hasInit = true;
             string val;
-            // Collect until comma, newline, or structural keyword
             while (!atEnd()
                    && !check(TOKEN_COMMA)
-                   && !check(TOKEN_NEWLINE)     // ← stop at end of line
+                   && !check(TOKEN_NEWLINE)
                    && !check(TOKEN_DECLARE)
                    && !check(TOKEN_PRINT)
                    && !check(TOKEN_SCAN)
@@ -157,7 +147,7 @@ vector<VarDecl> Parser::parseVarDeclList() {
         list.push_back(vd);
 
         if (!check(TOKEN_COMMA)) break;
-        advance();  // consume ','
+        advance();
     }
 
     return list;
@@ -172,15 +162,14 @@ Statement Parser::parseAssignOrExpr() {
         error("PARSE-020", "Unexpected token: '" + peek().value + "'", peek().line);
 
     while (check(TOKEN_IDENTIFIER) && check(TOKEN_ASSIGN, 1)) {
-        s.targets.push_back(advance().value);   // identifier
-        advance();                               // consume '='
+        s.targets.push_back(advance().value);
+        advance();
     }
 
     if (s.targets.empty())
         error("PARSE-021", "Expected assignment statement", peek().line);
 
-    // Collect RHS: collectExpression stops at newline automatically
-    s.expr = collectExpression({});  // empty stopAt — newline stops it
+    s.expr = collectExpression({});
 
     return s;
 }
@@ -260,13 +249,12 @@ Statement Parser::parseIf() {
 
     s.body = parseBlock({TOKEN_END_IF, TOKEN_ELSE_IF, TOKEN_ELSE});
 
-    // ELSE IF chain
     while (check(TOKEN_ELSE_IF)) {
         Statement elif;
         elif.type = STMT_IF;
         elif.line = peek().line;
 
-        advance();  // consume ELSE IF
+        advance();
         expect(TOKEN_LPAREN, "Expected '(' after ELSE IF");
         elif.condition = collectExpression({TOKEN_RPAREN});
         expect(TOKEN_RPAREN, "Expected ')' after ELSE IF condition");
@@ -282,7 +270,7 @@ Statement Parser::parseIf() {
     }
 
     if (check(TOKEN_ELSE)) {
-        advance();  // consume ELSE
+        advance();
         while (match(TOKEN_NEWLINE)) {}
         expect(TOKEN_START_IF, "Expected 'START IF' after ELSE");
         while (match(TOKEN_NEWLINE)) {}
